@@ -1,101 +1,155 @@
-#include "audio.h"
+#include <Arduino.h>
 #include <driver/i2s.h>
-#include <esp_dsp.h>
+#include <arduinoFFT.h>
+#include "state.h"
 
-// ---------------------------------------------------------
-// I2S PIN CONFIGURATION
-// ---------------------------------------------------------
-#define I2S_WS   5
-#define I2S_SD   26
-#define I2S_SCK  21
-#define I2S_PORT I2S_NUM_0
+// ------------------------------------------------------------
+// Audio / FFT
+// ------------------------------------------------------------
+#define SAMPLE_COUNT 1024
+#define SAMPLE_RATE 44100
 
-// ---------------------------------------------------------
-// FFT SETTINGS
-// ---------------------------------------------------------
-const int FFT_SIZE = 512;
+double vReal[SAMPLE_COUNT];
+double vImag[SAMPLE_COUNT];
+ArduinoFFT<double> FFT(vReal, vImag, SAMPLE_COUNT, SAMPLE_RATE);
 
-float fft_in[FFT_SIZE];
-float fft_out[FFT_SIZE];
-float windowFFT[FFT_SIZE];
-float lastSpectrum[FFT_SIZE / 2];
+// ------------------------------------------------------------
+// Beat Detection State
+// ------------------------------------------------------------
+unsigned long lastKick = 0;
+unsigned long lastSnare = 0;
+unsigned long lastHiHat = 0;
 
-// ---------------------------------------------------------
-// GLOBAL AUDIO VARIABLES
-// ---------------------------------------------------------
-float level = 0.0f;
-bool beatDetected = false;
-float bpmEstimate = 0.0f;
+double prevKick[10];
+double prevSnare[10];
+double prevHiHat[300];
 
-bool kick = false;
-bool snare = false;
-bool hihat = false;
+float kickBPM = 0;
+unsigned long lastKickTime = 0;
 
-float spectralFlux = 0.0f;
+int currentColorStep = 0;
+unsigned long dropStrobeUntil = 0;
 
-// ---------------------------------------------------------
-// BPM ESTIMATION
-// ---------------------------------------------------------
-static uint32_t beatTimes[32];
-static int beatIndex = 0;
-static bool lastBeatState = false;
+// ------------------------------------------------------------
+// Drop Detection
+// ------------------------------------------------------------
+unsigned long lastHiHatTimes[20];
+int hihatIndex = 0;
+double prevTotalEnergy = 1;
+unsigned long lastDrop = 0;
 
-static void updateBPM(bool beatNow) {
-    uint32_t now = millis();
+// ------------------------------------------------------------
+// Autogain
+// ------------------------------------------------------------
+double targetLevel = 5000.0;
+double gainMin = 0.2;
+double gainMax = 10.0;
 
-    if (beatNow && !lastBeatState) {
-        beatTimes[beatIndex] = now;
-        beatIndex = (beatIndex + 1) % 32;
-
-        int count = 0;
-        float sum = 0.0f;
-
-        for (int i = 0; i < 31; i++) {
-            uint32_t t1 = beatTimes[i];
-            uint32_t t2 = beatTimes[(i + 1) % 32];
-
-            if (!t1 || !t2 || t2 <= t1) continue;
-
-            float dt = (t2 - t1) / 1000.0f;
-            if (dt < 0.2f || dt > 2.0f) continue;
-
-            sum += dt;
-            count++;
-        }
-
-        if (count > 2) {
-            float avg = sum / count;
-            bpmEstimate = 60.0f / avg;
-        }
-    }
-
-    lastBeatState = beatNow;
+// ------------------------------------------------------------
+// Helper: Band Energy
+// ------------------------------------------------------------
+double bandEnergy(int startBin, int endBin) {
+    double sum = 0;
+    for (int i = startBin; i <= endBin; i++) sum += vReal[i];
+    return sum;
 }
 
-// ---------------------------------------------------------
-// HELPER: ENERGY IN FREQUENCY BAND
-// ---------------------------------------------------------
-static float bandEnergy(float *fft, int startBin, int endBin) {
-    float e = 0.0f;
+// ------------------------------------------------------------
+// Helper: Flux
+// ------------------------------------------------------------
+double bandFlux(double* prev, int startBin, int endBin) {
+    double flux = 0;
     for (int i = startBin; i <= endBin; i++) {
-        float re = fft[2 * i];
-        float im = fft[2 * i + 1];
-        e += re * re + im * im;
+        double diff = vReal[i] - prev[i];
+        if (diff > 0) flux += diff;
+        prev[i] = vReal[i];
     }
-    return e;
+    return flux;
 }
 
-// ---------------------------------------------------------
-// AUDIO INITIALIZATION
-// ---------------------------------------------------------
-void audio_init() {
-    i2s_config_t i2s_config = {
+// ------------------------------------------------------------
+// Generic Event Detector
+// ------------------------------------------------------------
+bool detectEvent(double energy, double flux, double &avgEnergy, double &avgFlux,
+                 unsigned long &lastTime, int minGap, double eMul, double fMul)
+{
+    avgEnergy = avgEnergy * 0.98 + energy * 0.02;
+    avgFlux   = avgFlux   * 0.90 + flux   * 0.10;
+
+    if (energy < avgEnergy * 0.5) return false;
+
+    bool ePeak = energy > avgEnergy * eMul;
+    bool fPeak = flux   > avgFlux   * fMul;
+
+    unsigned long now = millis();
+
+    if (ePeak && fPeak && (now - lastTime) > minGap) {
+        lastTime = now;
+        return true;
+    }
+
+    return false;
+}
+
+// ------------------------------------------------------------
+// BPM Tracking
+// ------------------------------------------------------------
+void updateKickBPM() {
+    unsigned long now = millis();
+    if (lastKickTime > 0) {
+        float interval = (now - lastKickTime) / 60000.0f;
+        if (interval > 0.2 && interval < 1.0) {
+            kickBPM = 1.0f / interval;
+        }
+    }
+    lastKickTime = now;
+}
+
+// ------------------------------------------------------------
+// Drop Detection
+// ------------------------------------------------------------
+bool detectDrop(double bassEnergy, bool kick, bool hihat) {
+    unsigned long now = millis();
+
+    if (hihat) {
+        lastHiHatTimes[hihatIndex] = now;
+        hihatIndex = (hihatIndex + 1) % 20;
+    }
+
+    int hihatRate = 0;
+    for (int i = 0; i < 20; i++)
+        if (now - lastHiHatTimes[i] < 1000) hihatRate++;
+
+    double totalEnergy = 0;
+    for (int i = 1; i < 200; i++) totalEnergy += vReal[i];
+
+    double energyJump = totalEnergy / (prevTotalEnergy + 1);
+    prevTotalEnergy = totalEnergy;
+
+    bool buildUp = hihatRate > 8;
+    bool energyExplosion = energyJump > 1.8;
+
+    if (now - lastDrop < 1500) return false;
+
+    if (buildUp && kick && energyExplosion) {
+        lastDrop = now;
+        return true;
+    }
+
+    return false;
+}
+
+// ------------------------------------------------------------
+// I2S Setup
+// ------------------------------------------------------------
+void setupI2S() {
+    const i2s_config_t i2s_config = {
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
-        .sample_rate = 44100,
+        .sample_rate = SAMPLE_RATE,
         .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
         .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
-        .communication_format = I2S_COMM_FORMAT_I2S,
-        .intr_alloc_flags = 0,
+        .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
         .dma_buf_count = 4,
         .dma_buf_len = 256,
         .use_apll = false,
@@ -103,125 +157,88 @@ void audio_init() {
         .fixed_mclk = 0
     };
 
-    i2s_pin_config_t pin_config = {
-        .bck_io_num = I2S_SCK,
-        .ws_io_num = I2S_WS,
+    const i2s_pin_config_t pin_config = {
+        .bck_io_num = 21,
+        .ws_io_num = 5,
         .data_out_num = -1,
-        .data_in_num = I2S_SD
+        .data_in_num = 26
     };
 
-    i2s_driver_install(I2S_PORT, &i2s_config, 0, NULL);
-    i2s_set_pin(I2S_PORT, &pin_config);
-
-    // Prepare FFT window
-    dsps_wind_hann_f32(windowFFT, FFT_SIZE);
-    dsps_fft2r_init_fc32(NULL, FFT_SIZE);
-
-    Serial.println("[AUDIO] I2S + FFT initialisiert");
+    i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
+    i2s_set_pin(I2S_NUM_0, &pin_config);
 }
 
-// ---------------------------------------------------------
-// AUDIO PROCESSING TASK
-// ---------------------------------------------------------
-void audio_task(void *pvParameters) {
-    int32_t sampleBuffer[FFT_SIZE];
-    size_t bytesRead = 0;
+// ------------------------------------------------------------
+// Audio Task
+// ------------------------------------------------------------
+void taskAudio(void *pv) {
+    setupI2S();
 
-    static float avgKick = 0, avgSnare = 0, avgHat = 0;
+    size_t bytesRead = 0;
+    int32_t raw[SAMPLE_COUNT];
+
+    static double avgKickE = 0, avgKickF = 0;
+    static double avgSnareE = 0, avgSnareF = 0;
+    static double avgHiHatE = 0, avgHiHatF = 0;
 
     for (;;) {
-        // Read audio samples
-        i2s_read(I2S_PORT, (void*)sampleBuffer, sizeof(sampleBuffer), &bytesRead, portMAX_DELAY);
-        int samples = bytesRead / sizeof(int32_t);
-        if (samples < FFT_SIZE) continue;
 
-        // ---------------------------------------------------------
-        // LEVEL CALCULATION
-        // ---------------------------------------------------------
-        level = 0.0f;
-        for (int i = 0; i < FFT_SIZE; i++) {
-            float s = (float)sampleBuffer[i] / 2147483648.0f;
-            fft_in[i] = s * windowFFT[i];
-            level += fabsf(s);
-        }
-        level /= FFT_SIZE;
+        // --- Read I2S ---
+        i2s_read(I2S_NUM_0, raw, SAMPLE_COUNT * sizeof(int32_t), &bytesRead, portMAX_DELAY);
 
-        // ---------------------------------------------------------
-        // FFT
-        // ---------------------------------------------------------
-        dsps_fft2r_fc32(fft_in, FFT_SIZE);
-        dsps_bit_rev_fc32(fft_in, FFT_SIZE);
-        dsps_cplx2reC_fc32(fft_in, fft_out, FFT_SIZE);
-
-        // ---------------------------------------------------------
-        // SPECTRAL FLUX
-        // ---------------------------------------------------------
-        spectralFlux = 0.0f;
-        for (int i = 0; i < FFT_SIZE / 2; i++) {
-            float mag = sqrtf(fft_out[2 * i] * fft_out[2 * i] +
-                              fft_out[2 * i + 1] * fft_out[2 * i + 1]);
-
-            float diff = mag - lastSpectrum[i];
-            if (diff > 0) spectralFlux += diff;
-
-            lastSpectrum[i] = mag;
+        for (int i = 0; i < SAMPLE_COUNT; i++) {
+            vReal[i] = (double)(raw[i] >> 14);
+            vImag[i] = 0;
         }
 
-        // Flux history for adaptive threshold
-        static float fluxHistory[64];
-        static int fluxIndex = 0;
+        // --- Autogain ---
+        double sum = 0;
+        for (int i = 0; i < SAMPLE_COUNT; i++) sum += abs(vReal[i]);
+        double currentLevel = sum / SAMPLE_COUNT;
+        if (currentLevel < 1) currentLevel = 1;
 
-        fluxHistory[fluxIndex] = spectralFlux;
-        fluxIndex = (fluxIndex + 1) % 64;
+        double gain = state.autoGain ? (targetLevel / currentLevel) : state.gain;
+        gain = constrain(gain, gainMin, gainMax);
 
-        float mean = 0.0f;
-        for (int i = 0; i < 64; i++) mean += fluxHistory[i];
-        mean /= 64.0f;
+        for (int i = 0; i < SAMPLE_COUNT; i++) vReal[i] *= gain;
 
-        bool beatNow = (spectralFlux > mean * 1.5f);
-        beatDetected = beatNow;
+        state.level = currentLevel;
+        state.gain = gain;
 
-        // ---------------------------------------------------------
-        // FREQUENCY BANDS FOR KICK / SNARE / HIHAT
-        // ---------------------------------------------------------
-        float sample_rate = 44100.0f;
-        float f_bin = sample_rate / FFT_SIZE;
+        // --- FFT ---
+        FFT.windowing(FFT_WIN_TYP_HAMMING, FFT_FORWARD);
+        FFT.compute(FFT_FORWARD);
+        FFT.complexToMagnitude();
 
-        auto freqToBin = [&](float f) {
-            int b = (int)(f / f_bin);
-            if (b < 1) b = 1;
-            if (b > FFT_SIZE / 2 - 1) b = FFT_SIZE / 2 - 1;
-            return b;
-        };
+        // --- Bands ---
+        double kickEnergy  = bandEnergy(1, 3);
+        double kickFlux    = bandFlux(prevKick, 1, 3);
 
-        int kickStart  = freqToBin(40.0f);
-        int kickEnd    = freqToBin(150.0f);
+        double snareEnergy = bandEnergy(4, 6);
+        double snareFlux   = bandFlux(prevSnare, 4, 6);
 
-        int snareStart = freqToBin(150.0f);
-        int snareEnd   = freqToBin(800.0f);
+        double hihatEnergy = bandEnergy(140, 280);
+        double hihatFlux   = bandFlux(prevHiHat, 140, 280);
 
-        int hatStart   = freqToBin(5000.0f);
-        int hatEnd     = freqToBin(12000.0f);
+        // --- Detect ---
+        bool kick = detectEvent(kickEnergy, kickFlux, avgKickE, avgKickF, lastKick, 120, 1.4, 1.8);
+        bool snare = detectEvent(snareEnergy, snareFlux, avgSnareE, avgSnareF, lastSnare, 120, 1.5, 1.7);
+        bool hihat = detectEvent(hihatEnergy, hihatFlux, avgHiHatE, avgHiHatF, lastHiHat, 40, 1.3, 1.5);
 
-        float eKick  = bandEnergy(fft_out, kickStart,  kickEnd);
-        float eSnare = bandEnergy(fft_out, snareStart, snareEnd);
-        float eHat   = bandEnergy(fft_out, hatStart,   hatEnd);
+        state.beat = kick;
 
-        // Adaptive smoothing
-        const float alpha = 0.05f;
-        avgKick  = (1 - alpha) * avgKick  + alpha * eKick;
-        avgSnare = (1 - alpha) * avgSnare + alpha * eSnare;
-        avgHat   = (1 - alpha) * avgHat   + alpha * eHat;
+        if (kick) updateKickBPM();
+        state.bpm = kickBPM;
 
-        kick  = (eKick  > avgKick  * 2.0f);
-        snare = (eSnare > avgSnare * 2.0f);
-        hihat = (eHat   > avgHat   * 2.0f);
+        bool drop = detectDrop(kickEnergy, kick, hihat);
+        state.drop = drop;
 
-        // ---------------------------------------------------------
-        // BPM UPDATE
-        // ---------------------------------------------------------
-        updateBPM(beatNow);
+        if (kick && state.mode == ControllerState::MODE_BEAT_CHASE)
+            currentColorStep = (currentColorStep + 1) % 4;
 
-        vTaskDelay(pdMS_TO_TICKS(10));
+        if (drop && state.strobeOnFastBass)
+            dropStrobeUntil = millis() + 200;
+
+        vTaskDelay(1);
     }
 }
