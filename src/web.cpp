@@ -8,12 +8,13 @@
 #include <ArduinoJson.h>
 
 // ------------------------------------------------------------
-// WebSocket
+// Globale Webserver-Objekte
 // ------------------------------------------------------------
-AsyncWebSocket ws("/ws");
 AsyncWebServer server(80);
+AsyncWebSocket ws("/ws");
+
 // ------------------------------------------------------------
-// HTML UI (eingebettet)
+// Eingebettete HTML WebUI
 // ------------------------------------------------------------
 static const char index_html[] PROGMEM = R"HTML(
 <!DOCTYPE html>
@@ -220,7 +221,7 @@ static void handleWsMessage(void *arg, uint8_t *data, size_t len) {
 // ------------------------------------------------------------
 // WebSocket Events
 // ------------------------------------------------------------
-static void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
+static void onWsEvent(AsyncWebSocket *serverPtr, AsyncWebSocketClient *client,
                       AwsEventType type, void *arg, uint8_t *data, size_t len)
 {
     if (type == WS_EVT_CONNECT) {

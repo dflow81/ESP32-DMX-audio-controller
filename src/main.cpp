@@ -6,24 +6,24 @@
 TaskHandle_t taskAudioHandle = nullptr;
 TaskHandle_t taskDMXHandle   = nullptr;
 
-// Task-Funktionen aus anderen Dateien
+// Task-Funktionen aus audio.cpp und dmx.cpp
 void taskAudio(void *pv);
 void taskDMX(void *pv);
-void setupWiFi();
-void setupWeb();
 
 void setup() {
     Serial.begin(115200);
     delay(200);
 
+    Serial.println("\n--- ESP32 DMX Audio Controller startet ---");
+
     // Globalen Zustand initialisieren
     initState();
 
-    // Netzwerk & Webserver starten
+    // Netzwerk + Webserver
     setupWiFi();
     setupWeb();
 
-    // Audio-Task auf Core 0
+    // Audio-Task (Core 0)
     xTaskCreatePinnedToCore(
         taskAudio,
         "Audio",
@@ -34,7 +34,7 @@ void setup() {
         0
     );
 
-    // DMX-Task auf Core 1
+    // DMX-Task (Core 1)
     xTaskCreatePinnedToCore(
         taskDMX,
         "DMX",
@@ -49,9 +49,7 @@ void setup() {
 }
 
 void loop() {
-    // WebSocket: Live-State an alle Clients senden
+    // WebSocket Broadcast alle 100ms
     ws.textAll(buildStateJson());
-
-    // UI-Update-Rate ~10 Hz
     delay(100);
 }

@@ -27,6 +27,7 @@ double prevHiHat[300];
 float kickBPM = 0;
 unsigned long lastKickTime = 0;
 
+// Wird von dmx.cpp genutzt
 int currentColorStep = 0;
 unsigned long dropStrobeUntil = 0;
 
@@ -140,17 +141,18 @@ bool detectDrop(double bassEnergy, bool kick, bool hihat) {
 }
 
 // ------------------------------------------------------------
-// I2S Setup
+// I2S Setup (INMP441)
 // ------------------------------------------------------------
 void setupI2S() {
+
     const i2s_config_t i2s_config = {
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
         .sample_rate = SAMPLE_RATE,
         .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
-        .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
-        .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+        .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,   // INMP441 = LEFT
+        .communication_format = I2S_COMM_FORMAT_STAND_I2S,  // WICHTIG!
         .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-        .dma_buf_count = 4,
+        .dma_buf_count = 8,
         .dma_buf_len = 256,
         .use_apll = false,
         .tx_desc_auto_clear = false,
@@ -158,14 +160,17 @@ void setupI2S() {
     };
 
     const i2s_pin_config_t pin_config = {
-        .bck_io_num = 21,
-        .ws_io_num = 5,
+        .bck_io_num = 21,   // SCK
+        .ws_io_num = 5,     // L/R
         .data_out_num = -1,
-        .data_in_num = 26
+        .data_in_num = 26   // SD
     };
 
     i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
     i2s_set_pin(I2S_NUM_0, &pin_config);
+
+    // INMP441 braucht dieses Timing
+    i2s_set_clk(I2S_NUM_0, SAMPLE_RATE, I2S_BITS_PER_SAMPLE_32BIT, I2S_CHANNEL_MONO);
 }
 
 // ------------------------------------------------------------
@@ -187,7 +192,7 @@ void taskAudio(void *pv) {
         i2s_read(I2S_NUM_0, raw, SAMPLE_COUNT * sizeof(int32_t), &bytesRead, portMAX_DELAY);
 
         for (int i = 0; i < SAMPLE_COUNT; i++) {
-            vReal[i] = (double)(raw[i] >> 14);
+            vReal[i] = (double)(raw[i] >> 14);  // INMP441 liefert 24‑Bit in 32‑Bit Frame
             vImag[i] = 0;
         }
 
@@ -221,9 +226,13 @@ void taskAudio(void *pv) {
         double hihatFlux   = bandFlux(prevHiHat, 140, 280);
 
         // --- Detect ---
-        bool kick = detectEvent(kickEnergy, kickFlux, avgKickE, avgKickF, lastKick, 120, 1.4, 1.8);
+        //bool kick = detectEvent(kickEnergy, kickFlux, avgKickE, avgKickF, lastKick, 120, 1.4, 1.8);
+        
+        bool kick = detectEvent(kickEnergy, kickFlux, avgKickE, avgKickF, lastKick, 100, 1.1, 1.2);
         bool snare = detectEvent(snareEnergy, snareFlux, avgSnareE, avgSnareF, lastSnare, 120, 1.5, 1.7);
         bool hihat = detectEvent(hihatEnergy, hihatFlux, avgHiHatE, avgHiHatF, lastHiHat, 40, 1.3, 1.5);
+
+        (void)snare;
 
         state.beat = kick;
 
