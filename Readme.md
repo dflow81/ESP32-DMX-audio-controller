@@ -2,11 +2,7 @@
 
 
 
-<p align="center">
-  <a href="https://www.youtube.com/watch?v=crHU-leWDkY&pp=ygUUZXNwMzIgZG14IGNvbnRyb2xsZXI%3D">
-    <img src="https://img.youtube.com/watch?v=crHU-leWDkY&pp=ygUUZXNwMzIgZG14IGNvbnRyb2xsZXI%3D" alt="Video" width="400">
-  </a>
-</p>
+[![ESP32 DMX Controller Video](https://img.youtube.com/vi/crHU-leWDkY/maxresdefault.jpg)]((https://youtu.be/crHU-leWDkY?si=FmBRcN0zoc1HT1VW)
 
 
 
