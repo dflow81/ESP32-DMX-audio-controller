@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>MH Control Center</title>
+    <style>
+        :root { --bg: #121212; --card: #1e1e1e; --primary: #007bff; --secondary: #28a745; --warn: #ff8800; --text: #e0e0e0; }
+        body { font-family: sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 15px; user-select: none; touch-action: manipulation; }
+        .card { max-width: 420px; margin: auto; background: var(--card); padding: 20px; border-radius: 16px; border: 1px solid #333; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+        h3 { margin: 0 0 15px 0; color: var(--primary); text-transform: uppercase; text-align: center; }
+        
+        select { width: 100%; padding: 12px; background: #333; color: white; border: 1px solid #444; border-radius: 8px; font-size: 16px; margin-bottom: 15px; }
+        
+        #joy-zone { width: 240px; height: 240px; background: #252525; border-radius: 50%; margin: 10px auto; position: relative; border: 2px solid #333; box-shadow: inset 0 0 15px rgba(0,0,0,0.5); }
+        
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px; }
+        button { padding: 14px; border: none; border-radius: 8px; font-size: 13px; font-weight: bold; cursor: pointer; color: white; }
+        button:active { opacity: 0.8; transform: scale(0.98); }
+        
+        .btn-save { background: var(--secondary); }
+        .btn-test { background: var(--warn); grid-column: span 2; }
+        .btn-auto { background: var(--primary); grid-column: span 2; }
+        
+        #status { font-size: 11px; color: #666; margin-top: 15px; text-align: center; min-height: 1.2em; }
+        .led { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #444; margin-right: 5px; }
+        .led.active { background: #00ff00; box-shadow: 0 0 5px #00ff00; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h3>Moving Head Setup</h3>
+    
+    <select id="mhSelect" onchange="selectMH()">
+        <option value="-1">-- Head auswählen --</option>
+    </select>
+
+    <div id="joy-zone"></div>
+
+    <div class="grid">
+        <button class="btn-save" onclick="sendCmd('save?pt=A')">PUNKT A (Start)</button>
+        <button class="btn-save" onclick="sendCmd('save?pt=B')">PUNKT B (Ende)</button>
+        
+        <button id="testBtn" class="btn-test" onclick="toggleTestMove()">MOTOR-TEST STARTEN</button>
+        
+        <button class="btn-auto" onclick="sendCmd('toggleAuto')">BPM AUTO START/STOP</button>
+    </div>
+
+    <div id="status"><span id="statusLed" class="led"></span> <span id="statusTxt">Verbunden</span></div>
+</div>
+
+<!-- nipplejs lokal vom ESP32 laden -->
+<script src="/nipplejs.min.js"></script>
+
+<script>
+    let currentId = -1;
+    let lastTs = 0;
+    let isTesting = false;
+
+    // 1. Fixture Liste laden
+    function loadList() {
+        fetch('/api/fixtures')
+            .then(res => res.json())
+            .then(data => {
+                const sel = document.getElementById('mhSelect');
+                data.forEach(fx => {
+                    if(fx.isMH) {
+                        let opt = document.createElement('option');
+                        opt.value = fx.id;
+                        opt.text = `${fx.name || 'Head'} (CH: ${fx.start})`;
+                        sel.add(opt);
+                    }
+                });
+            }).catch(e => setStatus("Fehler beim Laden!", true));
+    }
+
+    function selectMH() {
+        currentId = document.getElementById('mhSelect').value;
+        if(currentId !== "-1") fetch(`/api/select?id=${currentId}`);
+    }
+
+    function sendCmd(path) {
+        if(currentId === "-1") return alert("Bitte erst ein Gerät wählen!");
+        fetch(`/api/${path}&id=${currentId}`)
+            .then(() => setStatus("Befehl gesendet: " + path.split('?')[0]));
+    }
+
+    // 2. Motor-Test Logik
+    function toggleTestMove() {
+        const btn = document.getElementById('testBtn');
+        isTesting = !isTesting;
+
+        if (isTesting) {
+            btn.style.background = "#dc3545";
+            btn.innerText = "TEST LÄUFT... (STOPP)";
+            fetch('/api/setBPM?value=120'); // Sicherstellen, dass BPM > 30 ist
+            fetch('/api/setEffect?name=disco');
+            setStatus("Test-Modus: Disco-Bewegung aktiv");
+        } else {
+            btn.style.background = "var(--warn)";
+            btn.innerText = "MOTOR-TEST STARTEN";
+            fetch('/api/setEffect?name=static');
+            setStatus("Test beendet.");
+        }
+    }
+
+    function setStatus(msg, err = false) {
+        const txt = document.getElementById('statusTxt');
+        const led = document.getElementById('statusLed');
+        txt.innerText = msg;
+        led.className = err ? "led" : "led active";
+        if(!err) setTimeout(() => led.className = "led", 1000);
+    }
+
+    // 3. Joystick Setup
+    const joy = nipplejs.create({
+        zone: document.getElementById('joy-zone'),
+        mode: 'static',
+        position: {left: '50%', top: '50%'},
+        color: '#007bff',
+        size: 140
+    });
+
+    joy.on('move', (evt, data) => {
+        if (currentId === "-1") return;
+        let now = Date.now();
+        if (now - lastTs > 50) { // 20 FPS Limiter
+            let p = Math.round(127 + data.instance.frontPosition.x);
+            let t = Math.round(127 + data.instance.frontPosition.y);
+            
+            // Schnelles Senden via XHR
+            let x = new XMLHttpRequest();
+            x.open("GET", `/api/move?id=${currentId}&p=${p}&t=${t}`, true);
+            x.send();
+            lastTs = now;
+        }
+    });
+
+    window.onload = loadList;
+</script>
+
+</body>
+</html>

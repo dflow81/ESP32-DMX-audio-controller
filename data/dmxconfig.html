@@ -1,0 +1,199 @@
+
+<head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="/style.css">
+    <title>DMX Konfiguration</title>
+
+</head>
+<body>
+
+
+<!-- NAVIGATION -->
+<div class="nav">
+      <img src="/logo.svg" style="height:32px; width:auto; margin-right:15px; vertical-align:middle;">
+    <a href="/">Home</a>
+    <a href="/wifi">LAN</a>
+    <a href="/dmxconfig" class="active">DMX</a>
+</div>
+<div class="box">
+    <h2>Fixtures</h2>
+    <table id="fixtureTable">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Start</th>
+                <th>Bereich (Belegt)</th>
+                <th>Typ</th>
+                <th>Aktion</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+
+    <h3 style="margin-top:20px;">Fixture hinzufügen</h3>
+    <input id="newName" placeholder="Name (z.B. Spot 1)">
+    <input id="newStart" type="number" placeholder="Start">
+    <select id="newType"></select>
+    <button class="btn-add" onclick="addFixture()">+ Hinzufügen</button>
+</div>
+
+<div class="box">
+    <h2>Fixture-Typen</h2>
+    <table id="typeTable">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Kanäle</th>
+                <th>Offsets (Dim,R,G,B,W,Pan,Tilt)</th>
+                <th>Aktion</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+
+    <h3>Neuen Typ hinzufügen</h3>
+    <input id="tName" placeholder="Typname">
+    <input id="tChannels" type="number" placeholder="Kanäle">
+    <input id="tDim" type="number" placeholder="Dimmer">
+    <input id="tR" type="number" placeholder="R">
+    <input id="tG" type="number" placeholder="G">
+    <input id="tB" type="number" placeholder="B">
+    <input id="tW" type="number" placeholder="W">
+    <input id="tPan" type="number" placeholder="Pan">
+    <input id="tTilt" type="number" placeholder="Tilt">
+    <button onclick="addType()">Typ hinzufügen</button>
+</div>
+
+<button class="btn-save" onclick="saveConfig()">Konfiguration speichern</button>
+
+<script>
+let config = { fixtures: [], fixtureTypes: {} };
+let hasErrors = false;
+
+async function loadConfig() {
+    try {
+        const res = await fetch("/api/getConfig");
+        config = await res.json();
+        renderFixtures();
+        renderTypes();
+    } catch (e) { console.error("Ladefehler:", e); }
+}
+
+function renderFixtures() {
+    const tbody = document.querySelector("#fixtureTable tbody");
+    tbody.innerHTML = "";
+    hasErrors = false;
+
+    let highestAddress = 0;
+    let occupiedRanges = [];
+
+    // 1. Bereiche berechnen und auf Überlappung prüfen
+    config.fixtures.forEach((fx, i) => {
+        const def = config.fixtureTypes[fx.type];
+        const channels = def ? parseInt(def.channels) : 1;
+        const start = parseInt(fx.start);
+        const end = start + (channels - 1);
+        
+        if (end > highestAddress) highestAddress = end;
+
+        // Check gegen alle bisherigen Ranges
+        let overlap = occupiedRanges.find(r => (start <= r.end && end >= r.start));
+        occupiedRanges.push({ start, end, name: fx.name, index: i });
+
+        const row = document.createElement("tr");
+        if (overlap) {
+            row.className = "error-row";
+            hasErrors = true;
+        }
+
+        row.innerHTML = `
+            <td>
+                <input value="${fx.name}" onchange="editFixture(${i}, 'name', this.value)">
+                ${overlap ? `<span class="error-text">Konflikt mit ${overlap.name}!</span>` : ''}
+            </td>
+            <td><input type="number" value="${fx.start}" onchange="editFixture(${i}, 'start', parseInt(this.value)); renderFixtures();"></td>
+            <td>${start} → ${end} <small>(${channels} Ch)</small></td>
+            <td>
+                <select onchange="editFixture(${i}, 'type', this.value); renderFixtures();">
+                    ${Object.keys(config.fixtureTypes).map(t => `
+                        <option value="${t}" ${fx.type === t ? "selected" : ""}>${t}</option>
+                    `).join("")}
+                </select>
+            </td>
+            <td><button onclick="deleteFixture(${i})">Löschen</button></td>
+        `;
+        tbody.appendChild(row);
+    });
+
+    document.getElementById("newStart").value = highestAddress + 1;
+    const typeSelect = document.getElementById("newType");
+    typeSelect.innerHTML = Object.keys(config.fixtureTypes).map(t => `<option value="${t}">${t}</option>`).join("");
+}
+
+function renderTypes() {
+    const tbody = document.querySelector("#typeTable tbody");
+    tbody.innerHTML = "";
+    Object.entries(config.fixtureTypes).forEach(([name, def]) => {
+        const row = document.createElement("tr");
+        row.innerHTML = `
+            <td>${name}</td><td>${def.channels}</td>
+            <td>${def.offsetDimmer}, ${def.offsetR}, ${def.offsetG}, ${def.offsetB}, ${def.offsetW}, ${def.offsetPan}, ${def.offsetTilt}</td>
+            <td><button onclick="deleteType('${name}')">Löschen</button></td>
+        `;
+        tbody.appendChild(row);
+    });
+}
+
+function editFixture(i, key, value) { config.fixtures[i][key] = value; }
+
+function addFixture() {
+    const typeEl = document.getElementById("newType");
+    if (!typeEl.value) return alert("Zuerst einen Fixture-Typ erstellen!");
+
+    config.fixtures.push({
+        name: document.getElementById("newName").value || ("Fixture " + (config.fixtures.length + 1)),
+        start: parseInt(document.getElementById("newStart").value) || 1,
+        type: typeEl.value
+    });
+    document.getElementById("newName").value = "";
+    renderFixtures();
+}
+
+function deleteFixture(i) { config.fixtures.splice(i, 1); renderFixtures(); }
+
+function addType() {
+    const name = document.getElementById("tName").value;
+    if (!name) return;
+    config.fixtureTypes[name] = {
+        channels: parseInt(document.getElementById("tChannels").value) || 1,
+        offsetDimmer: parseInt(document.getElementById("tDim").value) || 0,
+        offsetR: parseInt(document.getElementById("tR").value) || 0,
+        offsetG: parseInt(document.getElementById("tG").value) || 0,
+        offsetB: parseInt(document.getElementById("tB").value) || 0,
+        offsetW: parseInt(document.getElementById("tW").value) || 0,
+        offsetPan: parseInt(document.getElementById("tPan").value) || 0,
+        offsetTilt: parseInt(document.getElementById("tTilt").value) || 0
+    };
+    renderTypes(); renderFixtures();
+}
+
+function deleteType(name) { delete config.fixtureTypes[name]; renderTypes(); renderFixtures(); }
+
+async function saveConfig() {
+    const res = await fetch("/api/saveConfig", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(config)
+    });
+    if (res.ok) {
+        alert("Konfiguration LIVE übernommen!");
+        // Optional: Seite neu laden, um sauberen Stand zu haben
+         location.reload(); 
+    }
+}
+
+
+loadConfig();
+</script>
+</body>
+</html>

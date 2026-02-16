@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="/style.css">
+    <title>WLAN Konfiguration</title>
+</head>
+<body>
+
+<!-- NAVIGATION -->
+<div class="nav">
+    <img src="/logo.svg" style="height:32px; width:auto; margin-right:15px; vertical-align:middle;">
+    <a href="/">Home</a>
+    <a href="/wifi" class="active">WLAN</a>
+    <a href="/dmxconfig">DMX</a>
+</div>
+
+<div class="container">
+    
+    <!-- SCAN BEREICH -->
+    <div class="card">
+        <h2>WLAN Netzwerke</h2>
+        <p style="color: #888; font-size: 0.9em;">Scanne nach verfügbaren Netzwerken in der Umgebung.</p>
+        <button onclick="scan()" id="scanBtn">Netzwerke scannen</button>
+        
+        <div id="list" style="margin-top: 15px; max-height: 300px; overflow-y: auto;">
+            <!-- Netzwerke erscheinen hier -->
+        </div>
+    </div>
+
+    <!-- EINGABE BEREICH -->
+    <div class="card">
+        <h2>Verbindung herstellen</h2>
+        
+        <div class="input-group">
+            <label for="ssid">Netzwerkname (SSID)</label>
+            <input id="ssid" type="text" placeholder="Netzwerk wählen oder tippen">
+        </div>
+
+        <div class="input-group" style="margin-top: 15px;">
+            <label for="pass">Passwort</label>
+            <input id="pass" type="password" placeholder="Passwort eingeben">
+        </div>
+
+        <button class="btn-save" style="width: 100%; margin-top: 20px;" onclick="save()">Einstellungen speichern</button>
+    </div>
+
+    <!-- RESET BEREICH -->
+    <div class="card" style="border: 1px solid #451a1a; margin-top: 40px;">
+        <h2 style="color: #ff5252;">Gefahrenzone</h2>
+        <p style="color: #888; font-size: 0.85em;">Löscht die gespeicherten WLAN-Daten. Der Controller startet danach im Access-Point-Modus neu.</p>
+        <button onclick="clearWifi()" style="background: #3a1a1a; color: #ff5252; border: 1px solid #5a2a2a; width: 100%; padding: 12px;">
+            Gespeichertes WLAN löschen
+        </button>
+    </div>
+
+</div>
+
+<script>
+/**
+ * Scannt nach Netzwerken
+ */
+function scan() {
+    const btn = document.getElementById("scanBtn");
+    const listDiv = document.getElementById("list");
+    
+    btn.innerText = "Suche läuft...";
+    btn.disabled = true;
+    listDiv.innerHTML = "<p style='color:#888'>Scan wird durchgeführt...</p>";
+
+    fetch("/api/scanWifi")
+        .then(r => r.json())
+        .then(list => {
+            let html = "";
+            if(!list || list.length === 0) {
+                html = "<p style='color:#ff5252'>Keine Netzwerke gefunden.</p>";
+            } else {
+                list.forEach(n => {
+                    const safeSSID = n.ssid.replace(/'/g, "\\'");
+                    html += `
+                        <div class="ssid-item" onclick="selectSSID('${safeSSID}')">
+                            <span style="font-weight:bold;">${n.ssid}</span>
+                            <span class="rssi">${n.rssi} dBm</span>
+                        </div>`;
+                });
+            }
+            listDiv.innerHTML = html;
+        })
+        .catch(err => {
+            listDiv.innerHTML = "<p style='color:#ff5252'>Fehler beim Scannen.</p>";
+        })
+        .finally(() => {
+            btn.innerText = "Netzwerke scannen";
+            btn.disabled = false;
+        });
+}
+
+/**
+ * SSID auswählen
+ */
+function selectSSID(s) {
+    document.getElementById("ssid").value = s;
+    document.getElementById("pass").focus();
+}
+
+/**
+ * WLAN Daten speichern
+ */
+function save() {
+    const ssid = document.getElementById("ssid").value;
+    const pass = document.getElementById("pass").value;
+
+    if(!ssid) return alert("Bitte wählen Sie ein WLAN!");
+
+    let data = { ssid: ssid, pass: pass };
+
+    fetch("/api/saveWifi", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(data)
+    })
+    .then(res => {
+        if(res.ok) alert("Gespeichert! Controller startet neu.");
+        else alert("Fehler beim Speichern.");
+    });
+}
+
+/**
+ * WLAN Daten löschen & Reset
+ */
+function clearWifi() {
+    if(!confirm("WLAN-Daten wirklich löschen? Der Controller ist danach nur noch über seinen eigenen Hotspot erreichbar.")) return;
+
+    fetch("/api/clearWifi", { method: "POST" })
+        .then(res => {
+            if(res.ok) {
+                alert("WLAN gelöscht! Der Controller startet jetzt neu.");
+                window.location.href = "/";
+            } else {
+                alert("Fehler beim Löschen.");
+            }
+        });
+}
+</script>
+
+</body>
+</html>

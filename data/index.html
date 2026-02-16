@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 DMX Controller</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+
+<body>
+
+<!-- NAVIGATION -->
+<div class="nav">
+    <img src="/logo.svg" style="height:32px; width:auto; margin-right:15px; vertical-align:middle;">
+    <a href="/" class="active">Home</a>
+    <a href="/wifi">WLAN</a>
+    <a href="/dmxconfig">DMX</a>
+    <a href="/mh" >Moving Head</a>
+</div>
+
+<div class="container">
+
+    <!-- STATUS & BPM -->
+    <div class="card">
+       <span> Live Audio Status</span> 
+        <div class="row">
+            <div class="half">
+                <div class="levelbar"><div id="levelBar" class="level"></div></div>
+                <div style="margin-top:15px; display: flex; align-items: center; gap: 10px;">
+                    <span id="beat" class="indicator"></span> <span>Beat</span> 
+                    <span id="drop" class="indicator"></span> <span>Drop</span> 
+                    <span>BPM </span>
+                    <span id="bpm" style=" color: #4fc3f7;">0</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MASTER & AUDIO THRESHOLD -->
+    <div class="row" style="display: flex; flex-wrap: wrap; gap: 10px;">
+        <div class="half card" style="flex: 1; min-width: 300px;">  
+            <span> Master Helligkeit</span> 
+            <div class="row">
+                <input type="range" id="master" min="0" max="255" value="255"
+                       oninput="previewMaster(this.value)"
+                       onchange="saveMaster(this.value)">
+                <div style="margin-top:10px;">Wert: <span id="masterVal" style="color:#4fc3f7">255</span></div>
+            </div>
+       
+            <div style="margin-top: 20px;">
+                <span> Audio Noise Gate</span>
+                <input type="range" id="threshold" min="0" max="200" value="45"
+                       oninput="previewThreshold(this.value)"
+                       onchange="saveThreshold(this.value)">
+                <div style="margin-top:10px;">Schwelle: <span id="thresholdVal" style="color:#4fc3f7">45</span></div>
+            </div>
+
+            <div style="margin-top: 20px;">
+                <span> Effekt Speed</span> 
+                <input id="timerFader" type="range" min="50" max="2000" value="500"
+                       oninput="setTimer()">
+                <div style="margin-top:10px;">Intervall: <span id="timerVal" style="color:#4fc3f7">500</span>ms</div>
+            </div>
+        </div>
+
+        <!-- FARBPICKER & QUICK COLORS -->
+        <div class="card half" style="flex: 1; min-width: 300px; text-align: center;">
+            <span> Grundfarbe</span> 
+            <div id="pickerContainer" style="position: relative; width: 150px; height: 150px; margin: 20px auto;">
+                <canvas id="colorCanvas" width="150" height="150" style="cursor: crosshair; border-radius: 50%;"></canvas>
+                <div id="colorCursor" style="position: absolute; width: 12px; height: 12px; border: 2px solid white; border-radius: 50%; pointer-events: none; transform: translate(-50%, -50%); box-shadow: 0 0 4px black; left: 50%; top: 50%;"></div>
+            </div>
+
+            <div style="display: flex; justify-content: center; gap: 10px; margin-top: 15px; flex-wrap: wrap;">
+                <div class="color-dot" style="background: #ff0000;" onclick="sendQuickColor('#ff0000')"></div>
+                <div class="color-dot" style="background: #00ff00;" onclick="sendQuickColor('#00ff00')"></div>
+                <div class="color-dot" style="background: #0000ff;" onclick="sendQuickColor('#0000ff')"></div>
+                <div class="color-dot" style="background: #ffffff;" onclick="sendQuickColor('#ffffff')"></div>
+                <div class="color-dot" style="background: #ffff00;" onclick="sendQuickColor('#ffff00')"></div>
+                <div class="color-dot" style="background: #ff00ff;" onclick="sendQuickColor('#ff00ff')"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- EFFEKTE -->
+    <div class="card">
+        <span>Effekt-Bibliothek </span> 
+        <b id="activeEffect" style="color:#4fc3f7; font-size:11px; margin-left: 10px;">static</b>
+        <div id="effectButtons" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; margin-top: 15px;">
+            <!-- Buttons werden per JS generiert -->
+        </div>
+    </div>
+
+</div>
+
+<script>
+let isDragging = false;
+const effects = [
+    "static", "fade", "rainbow", "chase", "bounce",
+    "dualwave", "pulse", "sparkle", "strobe",
+    "fire", "candle", "aurora", "ocean", "sunset",
+    "fullstrobe", "randomstrobe",
+    "dimmerwave", "dimmerchase", "dimmerbounce",
+    "disco","disco2", "retro"
+];
+
+const canvas = document.getElementById('colorCanvas');
+const ctx = canvas.getContext('2d');
+const cursor = document.getElementById('colorCursor');
+const radius = canvas.width / 2;
+
+window.onload = () => {
+    buildEffectButtons();
+    loadConfig();
+    drawCircle();
+    setInterval(updateStatus, 100);
+
+    // Slider-Sperre
+    const sliders = document.querySelectorAll('input[type="range"]');
+    sliders.forEach(s => {
+        ["mousedown", "touchstart"].forEach(e => s.addEventListener(e, () => isDragging = true));
+        ["mouseup", "touchend"].forEach(e => s.addEventListener(e, () => isDragging = false));
+    });
+};
+
+function drawCircle() {
+    for (let angle = 0; angle < 360; angle++) {
+        const startAngle = (angle - 2) * Math.PI / 180;
+        const endAngle = (angle) * Math.PI / 180;
+        ctx.beginPath();
+        ctx.moveTo(radius, radius);
+        ctx.arc(radius, radius, radius, startAngle, endAngle);
+        const grad = ctx.createRadialGradient(radius, radius, 0, radius, radius, radius);
+        grad.addColorStop(0, 'white');
+        grad.addColorStop(1, `hsl(${angle}, 100%, 50%)`);
+        ctx.fillStyle = grad;
+        ctx.fill();
+    }
+}
+
+function loadConfig() {
+    fetch("/api/getConfig").then(r => r.json()).then(data => {
+        if(!isDragging) {
+            document.getElementById("master").value = data.master;
+            document.getElementById("masterVal").textContent = data.master;
+            if(data.audioThreshold) {
+                document.getElementById("threshold").value = data.audioThreshold;
+                document.getElementById("thresholdVal").textContent = data.audioThreshold;
+            }
+        }
+        setEffect(data.effect || "static", false);
+    });
+}
+
+function updateStatus() {
+    fetch("/api/status").then(r => r.json()).then(data => {
+        const levelPercent = Math.min(100, data.level * 100); 
+        document.getElementById("levelBar").style.width = levelPercent + "%";
+        if (data.beat) {
+            const b = document.getElementById("beat");
+            b.classList.add("on");
+            setTimeout(() => b.classList.remove("on"), 150);
+        }
+        if (data.drop) {
+            const d = document.getElementById("drop");
+            d.classList.add("on");
+            setTimeout(() => d.classList.remove("on"), 500);
+        }
+        document.getElementById("bpm").textContent = Math.round(data.bpm);
+        if (!isDragging) document.getElementById("masterVal").textContent = data.master;
+    });
+}
+
+function previewMaster(v) { document.getElementById("masterVal").textContent = v; }
+function saveMaster(v) { fetch("/api/setMaster?value=" + v); }
+function previewThreshold(v) { document.getElementById("thresholdVal").textContent = v; }
+function saveThreshold(v) { fetch("/api/setThreshold?value=" + v); }
+function setTimer() {
+    const t = document.getElementById("timerFader").value;
+    document.getElementById("timerVal").textContent = t;
+    fetch("/api/setTimer?ms=" + t);
+}
+
+function buildEffectButtons() {
+    const container = document.getElementById("effectButtons");
+    container.innerHTML = effects.map(e => 
+        `<button id="btn-${e}" class="effect-btn" onclick="setEffect('${e}')">${e}</button>`
+    ).join("");
+}
+
+function setEffect(name, sendRequest = true) {
+    if(sendRequest) fetch("/api/setEffect?name=" + name);
+    document.getElementById("activeEffect").textContent = name;
+    
+    // Alle Buttons zurücksetzen
+    document.querySelectorAll(".effect-btn").forEach(btn => btn.classList.remove("active"));
+    
+    // Nur den einen Button aktivieren
+    const activeBtn = document.getElementById("btn-" + name);
+    if (activeBtn) activeBtn.classList.add("active");
+}
+
+
+function pickColor(e) {
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX || (e.touches ? e.touches[0].clientX : 0)) - rect.left;
+    const y = (e.clientY || (e.touches ? e.touches[0].clientY : 0)) - rect.top;
+    const imgData = ctx.getImageData(x, y, 1, 1).data;
+    const hex = "#" + ((1 << 24) + (imgData[0] << 16) + (imgData[1] << 8) + imgData[2]).toString(16).slice(1);
+    
+    cursor.style.left = x + 'px';
+    cursor.style.top = y + 'px';
+    cursor.style.opacity = "1";
+    sendQuickColor(hex);
+}
+
+function sendQuickColor(hex) {
+    fetch("/api/setColor?hex=" + encodeURIComponent(hex));
+    setEffect('static');
+}
+
+canvas.addEventListener('mousedown', (e) => { isDragging = true; pickColor(e); });
+window.addEventListener('mouseup', () => isDragging = false);
+canvas.addEventListener('mousemove', (e) => { if(isDragging) pickColor(e); });
+canvas.addEventListener('touchstart', (e) => { isDragging = true; pickColor(e); }, {passive:false});
+canvas.addEventListener('touchmove', (e) => { if(isDragging) pickColor(e); e.preventDefault(); }, {passive:false});
+canvas.addEventListener('touchend', () => isDragging = false);
+
+</script>
+</body>
+</html>
