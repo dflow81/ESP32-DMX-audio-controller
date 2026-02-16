@@ -2,12 +2,9 @@
 
 
 
-
-
-
 <p align="center">
-  <a href="https://www.youtube.com">
-    <img src="https://www.youtube.com/watch?v=crHU-leWDkY&pp=ygUUZXNwMzIgZG14IGNvbnRyb2xsZXI%3D" alt="Video" width="400">
+  <a href="https://www.youtube.com/watch?v=crHU-leWDkY&pp=ygUUZXNwMzIgZG14IGNvbnRyb2xsZXI%3D">
+    <img src="https://img.youtube.com/watch?v=crHU-leWDkY&pp=ygUUZXNwMzIgZG14IGNvbnRyb2xsZXI%3D" alt="Video" width="400">
   </a>
 </p>
 
