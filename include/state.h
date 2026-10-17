@@ -41,6 +41,34 @@ struct Fixture {
 
     // Werte der Zusatzkanäle (Gobo, Farbrad, Prisma, Fokus)
     uint8_t extra[EXTRA_COUNT] = {0, 0, 0, 0};
+
+    // Gruppe: 0 = keine (folgt dem Haupteffekt), 1…GROUP_COUNT
+    uint8_t group = 0;
+};
+
+// Fixture-Gruppen: eigene Effekte/Farben für Teile der Lampen
+#define GROUP_COUNT 4
+struct GroupSettings {
+    String  name;
+    bool    custom = false;     // false = folgt dem Haupteffekt
+    String  effect = "static";
+    uint8_t r = 255, g = 0, b = 0;
+};
+
+// Farbpalette, die Chase, Disco, Fade & Co. statt fester Farben verwenden
+#define PALETTE_MAX 4
+struct Palette {
+    bool    on = false;
+    uint8_t size = 3;           // 2…PALETTE_MAX
+    uint8_t c[PALETTE_MAX][3] = {{255, 0, 0}, {0, 0, 255}, {255, 0, 255}, {0, 255, 255}};
+};
+
+// Cue-Liste: feste Abfolge von Presets
+#define MAX_CUES 32
+struct Cue {
+    String preset;
+    int    duration = 16;       // in Beats oder Sekunden
+    bool   beats = true;
 };
 
 // Reaktion auf einen erkannten Drop
@@ -58,6 +86,11 @@ struct Preset {
     uint8_t r = 255, g = 0, b = 0;
     int     timerSpeed = 500;
     int     master = 255;
+
+    // Ab dieser Version auch Gruppen + Palette (ältere Presets lassen sie unverändert)
+    bool          hasGroups = false;
+    GroupSettings groups[GROUP_COUNT];
+    Palette       palette;
 };
 #define MAX_PRESETS      16
 #define PRESET_NAME_MAX  24
@@ -138,6 +171,47 @@ struct ControllerState {
     bool autoShow = false;      // Presets automatisch durchschalten
     int  showBeats = 32;        // … alle so viele Beats
 
+    // Gruppen + Palette
+    GroupSettings groups[GROUP_COUNT];
+    Palette palette;
+
+    // Nebelmaschine (DMX-Kanal, 0 = keine)
+    int     fogChannel = 0;
+    uint8_t fogLevel = 255;
+    bool    fogOnDrop = false;
+    int     fogDropSec = 3;
+    int     fogIntervalMin = 0;     // 0 = aus
+    int     fogIntervalSec = 5;
+    volatile unsigned long fogUntil = 0;        // automatischer Stoß bis …
+    volatile unsigned long manualFogUntil = 0;  // Nebel-Knopf (Keepalive wie Strobe)
+
+    // Standby: ohne Musik auf eine ruhige Szene wechseln
+    int     standbyMin = 0;         // 0 = aus
+    String  standbyPreset = "";     // leer = nur dimmen
+    volatile bool standbyActive = false;
+    volatile bool userTouched = false;          // Bedienung in der UI → Standby-Rückkehr verwerfen
+
+    // Cue-Liste
+    std::vector<Cue> cues;
+    bool cueLoop = true;
+    volatile bool cueRunning = false;
+    volatile bool cueRestart = false;           // Start von vorn angefordert
+    volatile bool cueNext = false;              // nächster Cue angefordert
+    volatile int  cueIndex = -1;
+
+    // Mikrofon-Kalibrierung (Einmessen)
+    bool   calibrated = false;
+    double gateKick = 0, gateSnare = 0, gateHihat = 0;            // Rauschschwellen
+    double refKick = 180000, refSnare = 190000, refHihat = 170000; // "laut" für Retro & Co.
+    double refLevel = 5000;                                        // Pegel für Vollausschlag
+
+    // Spektrum für die Web-UI (16 Bänder, 0…255)
+    volatile uint8_t spectrum[16] = {0};
+
+    // Kicks direkt aus der Musik (unabhängig von Tap-Tempo), für Standby
+    volatile uint32_t audioKickCount = 0;
+    volatile unsigned long lastAudioKickMs = 0;
+
     // Netzwerk-Eingang: Steuerung durch PC-Software per Art-Net / sACN
     bool netInput = false;
     int  netUniverse = 1;       // wie in QLC+ angezeigt (Art-Net = Universum-1, sACN = Universum)
@@ -186,6 +260,20 @@ FixtureDefinition fixtureDefFromJson(JsonObject t);
 // Preset aufrufen (Aufrufer hält den StateLock). persist=false für Auto-Show/Drop,
 // damit nicht ständig in den Flash geschrieben wird.
 void applyPreset(int index, bool persist);
+void applyPresetData(const Preset &p, bool persist);
+// Aktuellen Zustand als Preset erfassen (Effekt, Farbe, Speed, Master, Gruppen, Palette)
+Preset capturePreset(const String &name);
+
+// Gruppen/Palette als JSON für die Web-API
+void groupsToJsonPublic(JsonArray arr);
+void paletteToJsonPublic(JsonObject o);
+
+// Effekt, der für ein Fixture gerade gilt (Gruppen-Effekt oder Haupteffekt)
+const String& effectiveEffect(int fixtureIndex);
+
+// Farbe als "#rrggbb" bzw. aus Hex lesen
+String colorToHex(uint8_t r, uint8_t g, uint8_t b);
+void   hexToColor(const String &hex, uint8_t &r, uint8_t &g, uint8_t &b);
 int  findPreset(const String &name);   // -1, wenn nicht gefunden
 
 // Schreibt die gespeicherten Zusatzkanäle (Gobo …) aller Fixtures in den DMX-Puffer

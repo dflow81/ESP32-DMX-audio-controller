@@ -28,6 +28,7 @@
         <div class="row">
             <div class="half">
                 <div class="levelbar"><div id="levelBar" class="level"></div></div>
+                <canvas id="specCanvas" class="spec" height="60"></canvas>
                 <div style="margin-top:15px; display: flex; align-items: center; gap: 10px;">
                     <span id="beat" class="indicator"></span> <span>Beat</span> 
                     <span id="drop" class="indicator"></span> <span>Drop</span> 
@@ -35,6 +36,7 @@
                     <span id="bpm" style=" color: #4fc3f7;">0</span>
                 </div>
                 <div id="netBadge" class="net-badge" style="display:none;">PC-Steuerung aktiv (Art-Net/sACN) – Effekte pausiert</div>
+                <div id="standbyBadge" class="net-badge" style="display:none;">Standby – keine Musik erkannt</div>
                 <div class="tap-row">
                     <button id="tapBtn" class="btn-tap">TAP</button>
                     <button id="lockBtn" class="btn-lock" onclick="toggleBpmLock()">BPM fest</button>
@@ -59,7 +61,18 @@
                 <input type="range" id="threshold" min="0" max="200" value="45"
                        oninput="previewThreshold(this.value)"
                        onchange="saveThreshold(this.value)">
-                <div style="margin-top:10px;">Schwelle: <span id="thresholdVal" style="color:#4fc3f7">45</span></div>
+                <div style="margin-top:10px;">Schwelle: <span id="thresholdVal" style="color:#4fc3f7">45</span>
+                    <span id="calHint" class="preset-hint" style="display:none;">(% der eingemessenen Schwelle, 100 = eingemessen)</span></div>
+                <button class="btn-small" onclick="toggleCal()">Mikrofon einmessen …</button>
+                <div id="calPanel" class="cal-panel" style="display:none;">
+                    <div class="cal-step">1. Musik aus, Raum ruhig:
+                        <button onclick="calStep('silence')">Stille messen (3 s)</button> <span id="calSil"></span></div>
+                    <div class="cal-step">2. Musik so laut wie auf der Party:
+                        <button onclick="calStep('music')">Musik messen (8 s)</button> <span id="calMus"></span></div>
+                    <div class="cal-step">3. <button class="btn-save" onclick="calStep('apply')">Übernehmen</button></div>
+                    <div class="cal-bar"><div id="calFill"></div></div>
+                    <div id="calMsg" class="preset-hint"></div>
+                </div>
             </div>
 
             <div style="margin-top: 20px;">
@@ -77,6 +90,9 @@
                         <option value="3">Preset aufrufen</option>
                     </select>
                     <select id="dropPreset" onchange="saveDropAction()" style="display:none;"></select>
+                </div>
+                <div class="opt-row fog-only" style="display:none;">
+                    <label><input type="checkbox" id="fogOnDrop" onchange="saveFogOnDrop()"> Nebelstoß bei Drop</label>
                 </div>
             </div>
 
@@ -125,7 +141,34 @@
         <div class="live-buttons">
             <button id="strobeBtn" class="btn-strobe">STROBE (gedrückt halten)</button>
             <button id="blackoutBtn" class="btn-blackout" onclick="toggleBlackout()">BLACKOUT</button>
+            <button id="fogBtn" class="btn-fog fog-only" style="display:none;">NEBEL</button>
         </div>
+    </div>
+
+    <!-- FARBPALETTE -->
+    <div class="card">
+        <span>Farbpalette</span>
+        <div class="opt-row">
+            <label><input type="checkbox" id="paletteOn" onchange="savePalette()"> Eigene Farben für Chase, Disco, Fade &amp; Co.</label>
+            <select id="paletteSize" onchange="savePalette()">
+                <option value="2">2 Farben</option>
+                <option value="3" selected>3 Farben</option>
+                <option value="4">4 Farben</option>
+            </select>
+        </div>
+        <div class="palette-row">
+            <input type="color" id="pal0" value="#ff0000" onchange="savePalette()">
+            <input type="color" id="pal1" value="#0000ff" onchange="savePalette()">
+            <input type="color" id="pal2" value="#ff00ff" onchange="savePalette()">
+            <input type="color" id="pal3" value="#00ffff" onchange="savePalette()">
+        </div>
+    </div>
+
+    <!-- GRUPPEN -->
+    <div class="card" id="groupsCard" style="display:none;">
+        <span>Gruppen</span>
+        <div id="groupRows"></div>
+        <div class="preset-hint">Lampen ordnest du in der DMX-Config einer Gruppe zu. Ohne eigenen Effekt folgt eine Gruppe dem Haupteffekt.</div>
     </div>
 
     <!-- PRESETS -->
@@ -148,6 +191,36 @@
                 <option value="128">128 Beats</option>
             </select>
         </div>
+        <div class="opt-row">
+            <span>Standby nach</span>
+            <select id="standbyMin" onchange="saveStandby()">
+                <option value="0">aus</option>
+                <option value="5">5 Min</option>
+                <option value="10">10 Min</option>
+                <option value="15">15 Min</option>
+                <option value="30">30 Min</option>
+                <option value="60">60 Min</option>
+            </select>
+            <span>ohne Musik:</span>
+            <select id="standbyPreset" onchange="saveStandby()"></select>
+        </div>
+    </div>
+
+    <!-- CUE-LISTE -->
+    <div class="card">
+        <span>Cue-Liste</span> <b id="cueState" style="color:#4fc3f7; font-size:11px; margin-left:10px;"></b>
+        <div id="cueRows"></div>
+        <div class="opt-row">
+            <button onclick="addCue()">+ Cue</button>
+            <button class="btn-save" onclick="saveCues()">Liste speichern</button>
+            <label><input type="checkbox" id="cueLoop" onchange="saveCueLoop()"> Endlos wiederholen</label>
+        </div>
+        <div class="opt-row">
+            <button onclick="cueAction('start')">▶ Start</button>
+            <button onclick="cueAction('next')">⏭ Nächster</button>
+            <button onclick="cueAction('stop')">■ Stopp</button>
+        </div>
+        <div class="preset-hint">Jeder Cue ruft ein Preset auf und läuft die eingestellte Zeit. Start beendet die Auto-Show.</div>
     </div>
 
 </div>
@@ -174,6 +247,8 @@ window.onload = () => {
     document.getElementById("tapBtn").addEventListener("pointerdown", e => { e.preventDefault(); tap(); });
     loadConfig();
     loadPresets();
+    loadCues();
+    setupHoldButton("fogBtn", "/api/fog");
     drawCircle();
     connectLive();
 
@@ -222,6 +297,20 @@ function loadConfig() {
                 dropPresetName = data.dropPreset || "";
                 updateDropUi();
             }
+            if(data.palette) showPalette(data.palette);
+            if(data.groups) showGroups(data.groups, data.fixtures || []);
+            if(data.fog) {
+                const hasFog = data.fog.channel > 0;
+                document.querySelectorAll(".fog-only").forEach(el => el.style.display = hasFog ? "" : "none");
+                document.getElementById("fogOnDrop").checked = !!data.fog.onDrop;
+            }
+            if(data.standbyMin !== undefined) {
+                document.getElementById("standbyMin").value = String(data.standbyMin);
+                standbyPresetName = data.standbyPreset || "";
+                document.getElementById("standbyPreset").value = standbyPresetName;
+            }
+            if(data.cueLoop !== undefined) document.getElementById("cueLoop").checked = data.cueLoop;
+            document.getElementById("calHint").style.display = data.calibrated ? "" : "none";
             if(data.autoShow !== undefined) {
                 document.getElementById("autoShow").checked = data.autoShow;
                 document.getElementById("showBeats").value = String(data.showBeats);
@@ -269,6 +358,12 @@ function showStatus(data) {
     }
     document.getElementById("bpm").textContent = Math.round(data.bpm);
     if (!isDragging) document.getElementById("masterVal").textContent = data.master;
+    if (data.spec) drawSpectrum(data.spec);
+    if (data.standby !== undefined) {
+        document.getElementById("standbyBadge").style.display = data.standby ? "" : "none";
+    }
+    if (data.fog !== undefined) document.getElementById("fogBtn").classList.toggle("on", data.fog);
+    if (data.cueRunning !== undefined) showCueState(data.cueRunning, data.cueIndex);
     if (data.netActive !== undefined) {
         document.getElementById("netBadge").style.display = data.netActive ? "" : "none";
     }
@@ -312,6 +407,20 @@ function saveBeatSync() {
 
 // --- Drop-Reaktion ---
 let dropPresetName = "";
+// Alle Preset-Auswahlen (Drop, Standby, Cue-Liste) aktualisieren
+let presetNames = [];
+let standbyPresetName = "";
+function fillPresetSelects(list) {
+    presetNames = list.map(p => p.name);
+    fillDropPresets(list);
+    const sb = document.getElementById("standbyPreset");
+    sb.innerHTML = "";
+    sb.appendChild(new Option("nur dimmen (20 %)", ""));
+    list.forEach(p => sb.appendChild(new Option(p.name, p.name)));
+    sb.value = standbyPresetName;
+    renderCues();
+}
+
 function fillDropPresets(list) {
     const sel = document.getElementById("dropPreset");
     sel.innerHTML = "";
@@ -346,6 +455,249 @@ function saveAutoShow() {
     fetch(`/api/settings?autoShow=${on}&showBeats=${beats}`);
 }
 
+// --- Spektrum ---
+function drawSpectrum(spec) {
+    const c = document.getElementById("specCanvas");
+    if (c.width !== c.clientWidth) c.width = c.clientWidth;
+    const g = c.getContext("2d");
+    const w = c.width / spec.length;
+    g.clearRect(0, 0, c.width, c.height);
+    spec.forEach((v, i) => {
+        const h = v / 255 * c.height;
+        g.fillStyle = `hsl(${(i / spec.length) * 270}, 90%, 55%)`; // Bass rot … Höhen violett
+        g.fillRect(i * w + 1, c.height - h, w - 2, h);
+    });
+}
+
+// --- Halten-Knöpfe (Nebel): solange gedrückt alle 250 ms "on" senden ---
+function setupHoldButton(id, url) {
+    const btn = document.getElementById(id);
+    let timer = null;
+    const start = e => {
+        e.preventDefault();
+        if (timer) return;
+        btn.classList.add("on");
+        fetch(url + "?on=1");
+        timer = setInterval(() => fetch(url + "?on=1"), 250);
+    };
+    const stop = () => {
+        if (!timer) return;
+        clearInterval(timer);
+        timer = null;
+        btn.classList.remove("on");
+        fetch(url + "?on=0");
+    };
+    btn.addEventListener("pointerdown", start);
+    ["pointerup", "pointerleave", "pointercancel"].forEach(ev => btn.addEventListener(ev, stop));
+    btn.addEventListener("contextmenu", e => e.preventDefault());
+    window.addEventListener("blur", stop);
+}
+
+function saveFogOnDrop() {
+    fetch("/api/settings?fogOnDrop=" + (document.getElementById("fogOnDrop").checked ? 1 : 0));
+}
+
+// --- Mikrofon einmessen ---
+let calTimer = null;
+function toggleCal() {
+    const p = document.getElementById("calPanel");
+    p.style.display = p.style.display === "none" ? "" : "none";
+    if (p.style.display === "") calPoll();
+}
+
+function calShow(st) {
+    document.getElementById("calSil").textContent = st.silence ? "✓" : "";
+    document.getElementById("calMus").textContent = st.music ? "✓" : "";
+    document.getElementById("calFill").style.width = (st.phase ? st.progress : 0) + "%";
+    if (st.message) document.getElementById("calMsg").textContent = st.message;
+}
+
+function calPoll() {
+    fetch("/api/calibrate").then(r => r.json()).then(st => {
+        calShow(st);
+        clearTimeout(calTimer);
+        if (st.phase) calTimer = setTimeout(calPoll, 300);
+        else if (document.getElementById("calMsg").textContent.startsWith("Messe")) {
+            document.getElementById("calMsg").textContent = "Messung fertig.";
+        }
+    });
+}
+
+function calStep(step) {
+    if (step !== "apply") document.getElementById("calMsg").textContent = "Messe … bitte warten";
+    fetch("/api/calibrate?step=" + step).then(r => r.json()).then(st => {
+        calShow(st);
+        if (step === "apply" && st.ok) loadConfig(); // Slider steht jetzt auf 100
+        if (st.phase) calPoll();
+    });
+}
+
+// --- Farbpalette ---
+function showPalette(p) {
+    document.getElementById("paletteOn").checked = !!p.on;
+    document.getElementById("paletteSize").value = String(p.size);
+    (p.colors || []).forEach((c, i) => { const el = document.getElementById("pal" + i); if (el) el.value = c; });
+    updatePaletteUi();
+}
+
+function updatePaletteUi() {
+    const n = parseInt(document.getElementById("paletteSize").value);
+    for (let i = 0; i < 4; i++) document.getElementById("pal" + i).style.display = i < n ? "" : "none";
+}
+
+function savePalette() {
+    updatePaletteUi();
+    const on = document.getElementById("paletteOn").checked ? 1 : 0;
+    const n = document.getElementById("paletteSize").value;
+    const cols = [0, 1, 2, 3].map(i => document.getElementById("pal" + i).value).join(",");
+    fetch(`/api/settings?paletteOn=${on}&paletteSize=${n}&palette=${encodeURIComponent(cols)}`);
+}
+
+// --- Gruppen ---
+function showGroups(groups, fixtures) {
+    const rows = document.getElementById("groupRows");
+    rows.innerHTML = "";
+    let any = false;
+    groups.forEach((g, i) => {
+        const nr = i + 1;
+        const count = fixtures.filter(f => f.group === nr).length;
+        if (count === 0) return;
+        any = true;
+        const send = params => fetch(`/api/setGroup?g=${nr}&` + params);
+
+        const row = document.createElement("div");
+        row.className = "group-row";
+
+        const name = document.createElement("input");
+        name.type = "text"; name.maxLength = 20;
+        name.placeholder = "Gruppe " + nr;
+        name.value = g.name || "";
+        name.onchange = () => send("name=" + encodeURIComponent(name.value));
+
+        const info = document.createElement("span");
+        info.className = "preset-hint";
+        info.textContent = count + (count === 1 ? " Lampe" : " Lampen");
+
+        const customLbl = document.createElement("label");
+        const custom = document.createElement("input");
+        custom.type = "checkbox"; custom.checked = !!g.custom;
+        customLbl.append(custom, " eigener Effekt");
+
+        const eff = document.createElement("select");
+        ["none"].concat(effects).forEach(e => eff.appendChild(new Option(e === "none" ? "aus" : e, e)));
+        eff.value = g.effect || "static";
+
+        const col = document.createElement("input");
+        col.type = "color"; col.value = g.color || "#ff0000";
+
+        const update = () => { eff.disabled = col.disabled = !custom.checked; };
+        custom.onchange = () => { update(); send("custom=" + (custom.checked ? 1 : 0)); };
+        eff.onchange = () => send("effect=" + encodeURIComponent(eff.value));
+        col.onchange = () => send("color=" + encodeURIComponent(col.value));
+        update();
+
+        row.append(name, info, customLbl, eff, col);
+        rows.appendChild(row);
+    });
+    document.getElementById("groupsCard").style.display = any ? "" : "none";
+}
+
+// --- Standby ---
+function saveStandby() {
+    const min = document.getElementById("standbyMin").value;
+    standbyPresetName = document.getElementById("standbyPreset").value;
+    fetch(`/api/settings?standbyMin=${min}&standbyPreset=${encodeURIComponent(standbyPresetName)}`);
+}
+
+// --- Cue-Liste ---
+let cues = [];
+let cueRunning = false, cueIndex = -1;
+
+function loadCues() {
+    fetch("/api/cues").then(r => r.json()).then(data => {
+        cues = data.cues || [];
+        document.getElementById("cueLoop").checked = !!data.loop;
+        renderCues();
+        showCueState(data.running, data.index);
+    });
+}
+
+function renderCues() {
+    const box = document.getElementById("cueRows");
+    if (!box) return;
+    box.innerHTML = "";
+    if (cues.length === 0) {
+        box.innerHTML = "<div class='preset-hint'>Noch keine Cues. Erst Presets speichern, dann hier mit „+ Cue“ hinzufügen.</div>";
+        return;
+    }
+    cues.forEach((c, i) => {
+        const row = document.createElement("div");
+        row.className = "cue-row" + (cueRunning && i === cueIndex ? " active" : "");
+
+        const nr = document.createElement("span");
+        nr.className = "cue-nr";
+        nr.textContent = i + 1;
+
+        const sel = document.createElement("select");
+        presetNames.forEach(n => sel.appendChild(new Option(n, n)));
+        if (c.preset && !presetNames.includes(c.preset)) sel.appendChild(new Option(c.preset + " (fehlt)", c.preset));
+        sel.value = c.preset;
+        sel.onchange = () => c.preset = sel.value;
+
+        const dur = document.createElement("input");
+        dur.type = "number"; dur.min = 1; dur.max = 9999; dur.value = c.dur;
+        dur.onchange = () => c.dur = Math.max(1, parseInt(dur.value) || 1);
+
+        const unit = document.createElement("select");
+        unit.appendChild(new Option("Beats", "1"));
+        unit.appendChild(new Option("Sek.", "0"));
+        unit.value = c.beats ? "1" : "0";
+        unit.onchange = () => c.beats = unit.value === "1";
+
+        const del = document.createElement("button");
+        del.className = "preset-del";
+        del.textContent = "✕";
+        del.onclick = () => { cues.splice(i, 1); renderCues(); };
+
+        row.append(nr, sel, dur, unit, del);
+        box.appendChild(row);
+    });
+}
+
+function addCue() {
+    if (presetNames.length === 0) return alert("Bitte zuerst Presets speichern.");
+    if (cues.length >= 32) return alert("Maximal 32 Cues.");
+    cues.push({ preset: presetNames[0], dur: 16, beats: true });
+    renderCues();
+}
+
+function saveCues() {
+    fetch("/api/saveCues", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(cues)
+    }).then(r => alert(r.ok ? "Cue-Liste gespeichert." : "Fehler beim Speichern."));
+}
+
+function saveCueLoop() {
+    fetch("/api/settings?cueLoop=" + (document.getElementById("cueLoop").checked ? 1 : 0));
+}
+
+function cueAction(action) {
+    if (action === "start" && cues.length === 0) return alert("Die Cue-Liste ist leer.");
+    fetch("/api/cue?action=" + action).then(() => {
+        if (action === "start") document.getElementById("autoShow").checked = false;
+    });
+}
+
+function showCueState(running, index) {
+    if (running === cueRunning && index === cueIndex) return;
+    cueRunning = running; cueIndex = index;
+    document.getElementById("cueState").textContent =
+        running ? `läuft – Cue ${index + 1} von ${cues.length}` : "";
+    renderCues();
+}
+
 // --- Blackout ---
 function toggleBlackout() {
     const on = !document.getElementById("blackoutBtn").classList.contains("on");
@@ -356,7 +708,7 @@ function toggleBlackout() {
 // --- Presets ---
 function loadPresets() {
     fetch("/api/presets").then(r => r.json()).then(list => {
-        fillDropPresets(list);
+        fillPresetSelects(list);
         const box = document.getElementById("presetButtons");
         box.innerHTML = "";
         if (list.length === 0) {

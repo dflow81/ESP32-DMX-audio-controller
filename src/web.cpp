@@ -7,6 +7,7 @@
 #include "ota.h"
 #include "dmx.h"
 #include "netinput.h"
+#include "audio.h"
 
 // Definition des Webservers
 AsyncWebServer server(80);  
@@ -22,6 +23,7 @@ volatile bool configSaveNow = false;
 void markConfigDirty() {
     lastChangeTime = millis();
     configDirty = true;
+    state.userTouched = true; // Bedienung → Standby verlassen
 }
 
 // Wird vom Effekt-Task aufgerufen (hält dabei den StateLock)
@@ -63,7 +65,7 @@ void hexToRGB(String hex, uint8_t &r, uint8_t &g, uint8_t &b) {
 
 String buildStatusJson(bool beat) {
     JsonDocument doc;
-    doc["level"]  = constrain(state.level / 5000.0f, 0.0f, 1.0f);
+    doc["level"]  = constrain(state.level / max(1.0, state.refLevel), 0.0, 1.0);
     doc["beat"]   = beat;
     doc["drop"]   = state.drop;
     doc["bpm"]    = (isnan(state.bpm) || state.bpm < 10) ? 0 : (int)state.bpm;
@@ -71,6 +73,14 @@ String buildStatusJson(bool beat) {
     doc["blackout"] = state.blackout;
     doc["bpmLocked"] = state.bpmLocked;
     doc["netActive"] = netInputActive();
+    doc["standby"]   = state.standbyActive;
+    doc["cueRunning"] = state.cueRunning;
+    doc["cueIndex"]  = state.cueIndex;
+    unsigned long now = millis();
+    doc["fog"] = state.fogChannel > 0 &&
+                 ((long)(state.fogUntil - now) > 0 || (long)(state.manualFogUntil - now) > 0);
+    JsonArray spec = doc["spec"].to<JsonArray>();
+    for (int i = 0; i < 16; i++) spec.add(state.spectrum[i]);
     doc["audioThreshold"] = state.audioThreshold; // Für den Slider-Sync
 
     String json;
@@ -194,6 +204,34 @@ void setupWeb() {
         if ((v = param("movePattern")).length())  state.movePattern = constrain(v.toInt(), 0, MOVE_PATTERN_COUNT - 1);
         if ((v = param("moveSpread")).length())   state.moveSpread = v.toInt() != 0;
 
+        // Palette: paletteOn=0|1, paletteSize=2..4, palette=#rrggbb,#rrggbb,…
+        if ((v = param("paletteOn")).length())   state.palette.on = v.toInt() != 0;
+        if ((v = param("paletteSize")).length()) state.palette.size = constrain(v.toInt(), 2, PALETTE_MAX);
+        if ((v = param("palette")).length()) {
+            int start = 0;
+            for (int i = 0; i < PALETTE_MAX && start < (int)v.length(); i++) {
+                int comma = v.indexOf(',', start);
+                if (comma < 0) comma = v.length();
+                hexToColor(v.substring(start, comma), state.palette.c[i][0], state.palette.c[i][1], state.palette.c[i][2]);
+                start = comma + 1;
+            }
+        }
+
+        // Nebel
+        if ((v = param("fogChannel")).length())     state.fogChannel = constrain(v.toInt(), 0, 512);
+        if ((v = param("fogLevel")).length())       state.fogLevel = constrain(v.toInt(), 0, 255);
+        if ((v = param("fogOnDrop")).length())      state.fogOnDrop = v.toInt() != 0;
+        if ((v = param("fogDropSec")).length())     state.fogDropSec = constrain(v.toInt(), 1, 30);
+        if ((v = param("fogIntervalMin")).length()) state.fogIntervalMin = constrain(v.toInt(), 0, 120);
+        if ((v = param("fogIntervalSec")).length()) state.fogIntervalSec = constrain(v.toInt(), 1, 30);
+
+        // Standby
+        if ((v = param("standbyMin")).length())     state.standbyMin = constrain(v.toInt(), 0, 240);
+        if (req->hasParam("standbyPreset"))         state.standbyPreset = param("standbyPreset");
+
+        // Cue-Liste
+        if ((v = param("cueLoop")).length())        state.cueLoop = v.toInt() != 0;
+
         bool netChanged = false;
         if ((v = param("netInput")).length())    { state.netInput = v.toInt() != 0; netChanged = true; }
         if ((v = param("netUniverse")).length()) { state.netUniverse = constrain(v.toInt(), 1, 32768); netChanged = true; }
@@ -227,6 +265,114 @@ void setupWeb() {
         req->send(200, "text/plain", "OK");
     });
 
+    // API: Gruppe einstellen. g=1..4, custom=0|1, effect=Name, color=#rrggbb, name=Text
+    server.on("/api/setGroup", HTTP_GET, [](AsyncWebServerRequest *req){
+        int g = req->hasParam("g") ? req->getParam("g")->value().toInt() : 0;
+        if (g < 1 || g > GROUP_COUNT) { req->send(400, "text/plain", "Error"); return; }
+        StateLock lock;
+        GroupSettings &G = state.groups[g - 1];
+        if (req->hasParam("custom")) G.custom = req->getParam("custom")->value().toInt() != 0;
+        if (req->hasParam("effect")) G.effect = req->getParam("effect")->value();
+        if (req->hasParam("color"))  hexToColor(req->getParam("color")->value(), G.r, G.g, G.b);
+        if (req->hasParam("name"))   G.name = req->getParam("name")->value().substring(0, 20);
+        state.fadeRequest = true;
+        markConfigDirty();
+        req->send(200, "text/plain", "OK");
+    });
+
+    // API: Nebel-Knopf (wie Strobe: solange gedrückt wiederholt on=1 senden)
+    server.on("/api/fog", HTTP_GET, [](AsyncWebServerRequest *req){
+        const unsigned long FOG_KEEPALIVE_MS = 600;
+        if (req->hasParam("on")) {
+            bool on = req->getParam("on")->value().toInt() != 0;
+            state.manualFogUntil = on ? millis() + FOG_KEEPALIVE_MS : 0;
+            req->send(200, "text/plain", "OK");
+        } else { req->send(400, "text/plain", "Error"); }
+    });
+
+    // --- Cue-Liste ---
+    server.on("/api/cues", HTTP_GET, [](AsyncWebServerRequest *req){
+        StateLock lock;
+        JsonDocument doc;
+        JsonArray arr = doc["cues"].to<JsonArray>();
+        for (auto &c : state.cues) {
+            JsonObject o = arr.add<JsonObject>();
+            o["preset"] = c.preset;
+            o["dur"]    = c.duration;
+            o["beats"]  = c.beats;
+        }
+        doc["loop"]    = state.cueLoop;
+        doc["running"] = state.cueRunning;
+        doc["index"]   = state.cueIndex;
+        String json;
+        serializeJson(doc, json);
+        req->send(200, "application/json", json);
+    });
+
+    server.on("/api/saveCues", HTTP_POST, [](AsyncWebServerRequest *req){}, NULL,
+    [](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total){
+        const char *body = collectBody(req, data, len, index, total);
+        if (!body) return;
+        JsonDocument doc;
+        if (deserializeJson(doc, body, total) || !doc.is<JsonArray>()) {
+            req->send(400, "text/plain", "JSON Error");
+            return;
+        }
+        StateLock lock;
+        state.cues.clear();
+        for (JsonObject o : doc.as<JsonArray>()) {
+            if (state.cues.size() >= MAX_CUES) break;
+            Cue c;
+            c.preset   = o["preset"] | "";
+            c.duration = constrain((int)(o["dur"] | 16), 1, 9999);
+            c.beats    = o["beats"] | true;
+            state.cues.push_back(c);
+        }
+        if (state.cueIndex >= (int)state.cues.size()) state.cueIndex = state.cues.size() - 1;
+        markConfigDirty();
+        req->send(200, "text/plain", "OK");
+    });
+
+    // API: Cue-Liste steuern: action=start|stop|next
+    server.on("/api/cue", HTTP_GET, [](AsyncWebServerRequest *req){
+        String action = req->hasParam("action") ? req->getParam("action")->value() : "";
+        StateLock lock;
+        if (action == "start" && !state.cues.empty()) {
+            state.autoShow = false;   // Auto-Show und Cue-Liste schließen sich aus
+            state.cueRunning = true;
+            state.cueRestart = true;
+        } else if (action == "stop") {
+            state.cueRunning = false;
+        } else if (action == "next" && state.cueRunning) {
+            state.cueNext = true;
+        } else {
+            req->send(400, "text/plain", "Error");
+            return;
+        }
+        req->send(200, "text/plain", "OK");
+    });
+
+    // API: Mikrofon einmessen. step=silence|music|apply|cancel; ohne step: Status
+    server.on("/api/calibrate", HTTP_GET, [](AsyncWebServerRequest *req){
+        String step = req->hasParam("step") ? req->getParam("step")->value() : "";
+        String message;
+        bool ok = true;
+        if (step == "silence")     startCalibration(CAL_SILENCE, 3000);
+        else if (step == "music")  startCalibration(CAL_MUSIC, 8000);
+        else if (step == "cancel") cancelCalibration();
+        else if (step == "apply") {
+            StateLock lock;
+            ok = applyCalibration(message);
+        }
+        JsonDocument doc;
+        calibrationStatus(doc.to<JsonObject>());
+        doc["ok"] = ok;
+        if (message.length()) doc["message"] = message;
+        String json;
+        serializeJson(doc, json);
+        req->send(ok ? 200 : 400, "application/json", json);
+    });
+
     // --- Presets ---
     server.on("/api/presets", HTTP_GET, [](AsyncWebServerRequest *req){
         StateLock lock;
@@ -258,10 +404,7 @@ void setupWeb() {
             target = &state.presets.back();
             target->name = name;
         }
-        target->effect     = state.currentEffect;
-        target->r = state.colorR; target->g = state.colorG; target->b = state.colorB;
-        target->timerSpeed = state.timerSpeed;
-        target->master     = state.master;
+        *target = capturePreset(name); // inkl. Gruppen und Palette
         markConfigDirty();
         req->send(200, "text/plain", "OK");
     });
@@ -502,6 +645,7 @@ void setupWeb() {
         for (auto &fx : state.fixtures) {
             JsonObject o = arr.add<JsonObject>();
             o["name"] = fx.name; o["start"] = fx.start; o["type"] = fx.type;
+            o["group"] = fx.group;
         }
         JsonObject types = doc["fixtureTypes"].to<JsonObject>();
         for (auto &kv : state.fixtureTypes) {
@@ -525,6 +669,19 @@ void setupWeb() {
         doc["showBeats"]    = state.showBeats;
         doc["netInput"]     = state.netInput;
         doc["netUniverse"]  = state.netUniverse;
+        groupsToJsonPublic(doc["groups"].to<JsonArray>());
+        paletteToJsonPublic(doc["palette"].to<JsonObject>());
+        JsonObject fog = doc["fog"].to<JsonObject>();
+        fog["channel"]     = state.fogChannel;
+        fog["level"]       = state.fogLevel;
+        fog["onDrop"]      = state.fogOnDrop;
+        fog["dropSec"]     = state.fogDropSec;
+        fog["intervalMin"] = state.fogIntervalMin;
+        fog["intervalSec"] = state.fogIntervalSec;
+        doc["standbyMin"]    = state.standbyMin;
+        doc["standbyPreset"] = state.standbyPreset;
+        doc["cueLoop"]       = state.cueLoop;
+        doc["calibrated"]    = state.calibrated;
         doc["ip"]           = WiFi.isConnected() ? WiFi.localIP().toString() : WiFi.softAPIP().toString();
         String json;
         serializeJson(doc, json);
@@ -555,6 +712,7 @@ void setupWeb() {
             fx.name = o["name"].as<String>();
             fx.start = constrain(o["start"].as<int>(), 1, 512);
             fx.type = o["type"].as<String>();
+            fx.group = constrain((int)(o["group"] | 0), 0, GROUP_COUNT);
             for (auto &old : oldFixtures) {
                 if (old.name == fx.name) {
                     fx.panMin = old.panMin;   fx.panMax = old.panMax;

@@ -2,6 +2,7 @@
 #define EFFECTS_H
 
 #include <Arduino.h>
+#include <vector>
 
 // --------------------------------------------------
 // Effekt-Funktionen
@@ -41,7 +42,12 @@ void effectDropReaction(uint8_t action, unsigned long elapsed);
 // Hilfsfunktion für Timer-Speed
 float getT();
 
-// Zentrale Effektsteuerung
+// Zentrale Effektsteuerung: Effekt auf alle Fixtures mit der Grundfarbe
 void runEffect(const String& name);
+
+// Effekt auf eine Auswahl von Fixtures (Gruppe) mit eigener Grundfarbe.
+// slot: 0 = Haupteffekt, 1…GROUP_COUNT = Gruppe
+void runEffectOn(const String& name, const std::vector<int>& fixtures,
+                 uint8_t r, uint8_t g, uint8_t b, int slot);
 
 #endif

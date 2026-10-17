@@ -2,6 +2,7 @@
 #include <driver/i2s.h>
 #include <arduinoFFT.h>
 #include "state.h"
+#include "audio.h"
 
 // ------------------------------------------------------------
 // Audio / FFT Setup
@@ -133,6 +134,123 @@ bool detectDrop(double rawEnergy, bool kick, double kickEnergy, unsigned long si
     return false;
 }
 
+// ------------------------------------------------------------
+// Mikrofon einmessen
+// ------------------------------------------------------------
+// Messgrößen: 0 = Kick, 1 = Snare, 2 = Hi-Hat, 3 = Pegel
+struct CalMeasure {
+    double sum[4] = {0};
+    double peak[4] = {0};
+    int frames = 0;
+    bool done = false;
+};
+static CalMeasure calSilence, calMusic;
+static volatile int calPhase = 0;
+static volatile unsigned long calEndMs = 0;
+static unsigned long calDurationMs = 1;
+
+void startCalibration(int phase, unsigned long durationMs) {
+    CalMeasure &m = (phase == CAL_SILENCE) ? calSilence : calMusic;
+    m = CalMeasure();
+    calDurationMs = max(1UL, durationMs);
+    calEndMs = millis() + durationMs;
+    calPhase = phase;
+}
+
+void cancelCalibration() { calPhase = 0; }
+
+// Wird vom Audio-Task für jeden Frame aufgerufen
+static void calibrationFrame(const double v[4]) {
+    int phase = calPhase;
+    if (!phase) return;
+    CalMeasure &m = (phase == CAL_SILENCE) ? calSilence : calMusic;
+    for (int i = 0; i < 4; i++) {
+        m.sum[i] += v[i];
+        if (v[i] > m.peak[i]) m.peak[i] = v[i];
+    }
+    m.frames++;
+    if ((long)(millis() - calEndMs) >= 0) {
+        m.done = m.frames > 0;
+        calPhase = 0;
+    }
+}
+
+void calibrationStatus(JsonObject o) {
+    o["phase"]    = calPhase;
+    long left     = (long)(calEndMs - millis());
+    o["progress"] = calPhase ? constrain(100 - left * 100 / (long)calDurationMs, 0L, 100L) : 0;
+    o["silence"]  = calSilence.done;
+    o["music"]    = calMusic.done;
+    o["calibrated"] = state.calibrated;
+}
+
+bool applyCalibration(String &message) {
+    if (!calSilence.done && !calMusic.done) {
+        message = "Bitte zuerst Stille und/oder Musik messen";
+        return false;
+    }
+    double noisePeak[4], musicAvg[4], musicPeak[4];
+    for (int i = 0; i < 4; i++) {
+        noisePeak[i] = calSilence.done ? calSilence.peak[i] : 0;
+        musicAvg[i]  = calMusic.done ? calMusic.sum[i] / calMusic.frames : 0;
+        musicPeak[i] = calMusic.done ? calMusic.peak[i] : 0;
+    }
+
+    if (calSilence.done) {
+        // Schwelle knapp über dem lautesten Rauschen – aber unter dem Musik-Durchschnitt
+        double *gates[3] = {&state.gateKick, &state.gateSnare, &state.gateHihat};
+        for (int i = 0; i < 3; i++) {
+            double g = noisePeak[i] * 1.3;
+            if (calMusic.done && g > musicAvg[i] * 0.8) g = (noisePeak[i] + musicAvg[i]) / 2;
+            *gates[i] = g;
+        }
+    }
+    if (calMusic.done) {
+        // "Laut" = Spitzen der Musik (für Retro-Effekt und Pegelanzeige)
+        state.refKick  = max(musicPeak[0], state.gateKick * 2 + 1);
+        state.refSnare = max(musicPeak[1], state.gateSnare * 2 + 1);
+        state.refHihat = max(musicPeak[2], state.gateHihat * 2 + 1);
+        state.refLevel = max(1.0, musicAvg[3] * 2);   // Durchschnitt ≈ halber Ausschlag
+    }
+    state.calibrated = true;
+    state.audioThreshold = 100;   // 100 % = eingemessene Schwelle
+    markConfigDirty();
+
+    message = String("Eingemessen") + (calSilence.done ? " (Stille" : " (") +
+              (calSilence.done && calMusic.done ? " + " : "") + (calMusic.done ? "Musik)" : ")");
+    return true;
+}
+
+// ------------------------------------------------------------
+// Spektrum für die Web-UI: 16 logarithmisch verteilte Bänder (~43 Hz … ~16 kHz)
+// Jedes Band hat einen eigenen, langsam steigenden Rauschboden → bei Stille 0
+// ------------------------------------------------------------
+#define SPECTRUM_BANDS 16
+static void updateSpectrum() {
+    static int edges[SPECTRUM_BANDS + 1];
+    static float floorDb[SPECTRUM_BANDS];
+    static bool init = false;
+    if (!init) {
+        for (int b = 0; b <= SPECTRUM_BANDS; b++) {
+            edges[b] = (int)roundf(powf(372.0f, (float)b / SPECTRUM_BANDS)); // Bin 1 … 372
+        }
+        for (int b = 1; b <= SPECTRUM_BANDS; b++) if (edges[b] <= edges[b - 1]) edges[b] = edges[b - 1] + 1;
+        for (int b = 0; b < SPECTRUM_BANDS; b++) floorDb[b] = 200;
+        init = true;
+    }
+    for (int b = 0; b < SPECTRUM_BANDS; b++) {
+        double sum = 0;
+        int n = 0;
+        for (int i = edges[b]; i < edges[b + 1] && i < SAMPLE_COUNT / 2; i++) { sum += vReal[i]; n++; }
+        float db = 20.0f * log10f((float)(sum / max(1, n)) + 1.0f);
+        // Rauschboden: fällt sofort, steigt langsam (~1 dB/s)
+        if (db < floorDb[b]) floorDb[b] = db;
+        else floorDb[b] += 0.02f;
+        float v = (db - floorDb[b] - 3.0f) / 40.0f;   // 40 dB Anzeigebereich
+        state.spectrum[b] = (uint8_t)(constrain(v, 0.0f, 1.0f) * 255);
+    }
+}
+
 void setupI2S() {
     const i2s_config_t i2s_config = {
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
@@ -199,10 +317,26 @@ void taskAudio(void *pv) {
         state.snareEnergy = sRaw;
         state.hihatEnergy = hRaw;
 
-        // Beat-Detection mit Noise-Gate vom Slider
-        bool isKick  = kickDet.detect(kRaw, 1.25, 170, (double)state.audioThreshold); 
-        bool isSnare = snareDet.detect(sRaw, 1.3, 140, (double)state.audioThreshold * 0.6);
-        bool isHihat = hihatDet.detect(hRaw, 1.5, 70, (double)state.audioThreshold * 0.3);
+        // Einmessen + Spektrum
+        double calValues[4] = {kRaw, sRaw, hRaw, currentLevel};
+        calibrationFrame(calValues);
+        updateSpectrum();
+
+        // Beat-Detection mit Noise-Gate vom Slider.
+        // Eingemessen: Schwelle = gemessenes Rauschen × Slider-% (100 = eingemessen).
+        // Sonst wie früher (der alte Wert ist im Vergleich zu den Energien winzig).
+        double gateScale = state.audioThreshold / 100.0;
+        double gK = state.calibrated ? state.gateKick  * gateScale : state.audioThreshold;
+        double gS = state.calibrated ? state.gateSnare * gateScale : state.audioThreshold * 0.6;
+        double gH = state.calibrated ? state.gateHihat * gateScale : state.audioThreshold * 0.3;
+        bool isKick  = kickDet.detect(kRaw, 1.25, 170, gK); 
+        bool isSnare = snareDet.detect(sRaw, 1.3, 140, gS);
+        bool isHihat = hihatDet.detect(hRaw, 1.5, 70, gH);
+
+        if (isKick) {
+            state.audioKickCount++;          // echte Kicks aus der Musik (für Standby)
+            state.lastAudioKickMs = millis();
+        }
 
         unsigned long sinceLastKick = millis() - lastKickTime; // vor updateKickBPM() merken
         if (isKick) {

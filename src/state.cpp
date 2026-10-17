@@ -7,6 +7,8 @@
 // So kann ein Dateisystem-Upload (Web-Oberfläche) die Einstellungen nie überschreiben.
 #define NVS_NAMESPACE   "dmx"
 #define NVS_CONFIG_KEY  "config"
+#define NVS_PRESETS_KEY "presets"
+#define NVS_CUES_KEY    "cues"
 #define LEGACY_CONFIG   "/config.json"   // alter Speicherort, wird einmalig übernommen
 
 ControllerState state;
@@ -83,16 +85,119 @@ int findPreset(const String &name) {
     return -1;
 }
 
-void applyPreset(int index, bool persist) {
-    if (index < 0 || index >= (int)state.presets.size()) return;
-    const Preset &p = state.presets[index];
+void applyPresetData(const Preset &p, bool persist) {
     state.currentEffect = p.effect;
     state.colorR = p.r; state.colorG = p.g; state.colorB = p.b;
     state.timerSpeed = p.timerSpeed;
     state.master = p.master;
+    if (p.hasGroups) {
+        // Gruppen ohne eigenen Effekt bzw. eine ausgeschaltete Palette nur abschalten –
+        // die eingestellten Farben/Effekte bleiben für später erhalten.
+        // Gruppennamen gehören zur Anlage, nicht zum Preset.
+        for (int g = 0; g < GROUP_COUNT; g++) {
+            if (p.groups[g].custom) {
+                state.groups[g].custom = true;
+                state.groups[g].effect = p.groups[g].effect;
+                state.groups[g].r = p.groups[g].r;
+                state.groups[g].g = p.groups[g].g;
+                state.groups[g].b = p.groups[g].b;
+            } else {
+                state.groups[g].custom = false;
+            }
+        }
+        if (p.palette.on) state.palette = p.palette;
+        else state.palette.on = false;
+    }
     state.fadeRequest = true;
     if (persist) markConfigDirty();
 }
+
+void applyPreset(int index, bool persist) {
+    if (index < 0 || index >= (int)state.presets.size()) return;
+    applyPresetData(state.presets[index], persist);
+}
+
+Preset capturePreset(const String &name) {
+    Preset p;
+    p.name       = name;
+    p.effect     = state.currentEffect;
+    p.r = state.colorR; p.g = state.colorG; p.b = state.colorB;
+    p.timerSpeed = state.timerSpeed;
+    p.master     = state.master;
+    p.hasGroups  = true;
+    for (int g = 0; g < GROUP_COUNT; g++) p.groups[g] = state.groups[g];
+    p.palette    = state.palette;
+    return p;
+}
+
+const String& effectiveEffect(int i) {
+    if (i >= 0 && i < (int)state.fixtures.size()) {
+        uint8_t g = state.fixtures[i].group;
+        if (g >= 1 && g <= GROUP_COUNT && state.groups[g - 1].custom) return state.groups[g - 1].effect;
+    }
+    return state.currentEffect;
+}
+
+String colorToHex(uint8_t r, uint8_t g, uint8_t b) {
+    char hex[8];
+    snprintf(hex, sizeof(hex), "#%02x%02x%02x", r, g, b);
+    return String(hex);
+}
+
+void hexToColor(const String &hexIn, uint8_t &r, uint8_t &g, uint8_t &b) {
+    String hex = hexIn;
+    if (hex.startsWith("#")) hex = hex.substring(1);
+    long n = strtol(hex.c_str(), NULL, 16);
+    r = (n >> 16) & 0xFF; g = (n >> 8) & 0xFF; b = n & 0xFF;
+}
+
+// ----------------------------------------------------
+// Gruppen / Palette <-> JSON
+// ----------------------------------------------------
+static void groupsToJson(JsonArray arr, const GroupSettings *groups, bool withName) {
+    for (int g = 0; g < GROUP_COUNT; g++) {
+        JsonObject o = arr.add<JsonObject>();
+        if (withName) o["name"] = groups[g].name;
+        o["custom"] = groups[g].custom;
+        o["effect"] = groups[g].effect;
+        o["color"]  = colorToHex(groups[g].r, groups[g].g, groups[g].b);
+    }
+}
+
+static void groupsFromJson(JsonArray arr, GroupSettings *groups) {
+    int g = 0;
+    for (JsonObject o : arr) {
+        if (g >= GROUP_COUNT) break;
+        if (o["name"].is<const char*>()) groups[g].name = o["name"].as<String>();
+        groups[g].custom = o["custom"] | false;
+        groups[g].effect = o["effect"] | "static";
+        hexToColor(o["color"] | "#ff0000", groups[g].r, groups[g].g, groups[g].b);
+        g++;
+    }
+}
+
+static void paletteToJson(JsonObject o, const Palette &p) {
+    o["on"]   = p.on;
+    o["size"] = p.size;
+    JsonArray c = o["colors"].to<JsonArray>();
+    for (int i = 0; i < PALETTE_MAX; i++) c.add(colorToHex(p.c[i][0], p.c[i][1], p.c[i][2]));
+}
+
+static void paletteFromJson(JsonObject o, Palette &p) {
+    if (o.isNull()) return;
+    p.on   = o["on"] | false;
+    p.size = constrain((int)(o["size"] | 3), 2, PALETTE_MAX);
+    int i = 0;
+    for (JsonVariant v : o["colors"].as<JsonArray>()) {
+        if (i >= PALETTE_MAX) break;
+        hexToColor(v | "#ffffff", p.c[i][0], p.c[i][1], p.c[i][2]);
+        i++;
+    }
+}
+
+// Für die Web-API (gleiche Darstellung wie in der Config)
+void groupsToJsonPublic(JsonArray arr)      { groupsToJson(arr, state.groups, true); }
+void paletteToJsonPublic(JsonObject o)      { paletteToJson(o, state.palette); }
 
 // ----------------------------------------------------
 // FixtureDefinition holen
@@ -153,30 +258,47 @@ void updateDMXChannelCount() {
 // Config speichern (JSON im NVS)
 // ----------------------------------------------------
 static void buildConfigDoc(JsonDocument &doc, bool includeWifi);
-static bool writeConfigToNVS(const String &json);
+static bool writeConfigToNVS(JsonDocument &doc);
 
 void saveConfig() {
     JsonDocument doc;
     buildConfigDoc(doc, true);
-
-    String json;
-    serializeJson(doc, json);
-    if (writeConfigToNVS(json)) Serial.printf("Config gespeichert (%u Bytes)\n", (unsigned)json.length());
+    writeConfigToNVS(doc);
 }
 
-static bool writeConfigToNVS(const String &json) {
+// Der NVS-Bereich ist nur 20 KB groß, und beim Überschreiben müssen alter und neuer
+// Stand kurz gleichzeitig hineinpassen. Deshalb wird die Config in drei Einträge
+// aufgeteilt: Grund-Config, Presets und Cue-Liste.
+static bool putJson(Preferences &prefs, const char *key, JsonVariantConst v) {
+    String json;
+    serializeJson(v, json);
+    size_t written = prefs.putBytes(key, json.c_str(), json.length());
+    if (written != json.length()) {
+        Serial.printf("Fehler: '%s' konnte nicht gespeichert werden (%u Bytes)\n", key, (unsigned)json.length());
+        return false;
+    }
+    return true;
+}
+
+static bool writeConfigToNVS(JsonDocument &doc) {
     Preferences prefs;
     if (!prefs.begin(NVS_NAMESPACE, false)) {
         Serial.println("Fehler: NVS konnte nicht geöffnet werden");
         return false;
     }
-    size_t written = prefs.putBytes(NVS_CONFIG_KEY, json.c_str(), json.length());
+    JsonDocument presets, cues;
+    presets.set(doc["presets"]);
+    cues.set(doc["cues"]);
+    doc.remove("presets");
+    doc.remove("cues");
+
+    bool ok = putJson(prefs, NVS_PRESETS_KEY, presets.as<JsonVariantConst>());
+    ok = putJson(prefs, NVS_CUES_KEY, cues.as<JsonVariantConst>()) && ok;
+    ok = putJson(prefs, NVS_CONFIG_KEY, doc.as<JsonVariantConst>()) && ok;
+    size_t freeEntries = prefs.freeEntries();
     prefs.end();
-    if (written != json.length()) {
-        Serial.println("Fehler: Config konnte nicht gespeichert werden");
-        return false;
-    }
-    return true;
+    if (ok) Serial.printf("Config gespeichert (NVS frei: %u Einträge)\n", (unsigned)freeEntries);
+    return ok;
 }
 
 // ----------------------------------------------------
@@ -205,9 +327,7 @@ bool importConfigJson(const char *json, size_t len, String &error) {
     doc["wifi_ssid"] = state.wifi_ssid;
     doc["wifi_pass"] = state.wifi_pass;
 
-    String out;
-    serializeJson(doc, out);
-    if (!writeConfigToNVS(out)) {
+    if (!writeConfigToNVS(doc)) {
         error = "Speichern fehlgeschlagen";
         return false;
     }
@@ -229,6 +349,7 @@ static void buildConfigDoc(JsonDocument &doc, bool includeWifi) {
         o["tMin"]  = fx.tiltMin;
         o["tMax"]  = fx.tiltMax;
         o["auto"]  = fx.isAutoMoving;
+        o["group"] = fx.group;
         JsonArray ex = o["extra"].to<JsonArray>();
         for (int e = 0; e < EXTRA_COUNT; e++) ex.add(fx.extra[e]);
     }
@@ -270,7 +391,53 @@ static void buildConfigDoc(JsonDocument &doc, bool includeWifi) {
         o["r"] = p.r; o["g"] = p.g; o["b"] = p.b;
         o["speed"]  = p.timerSpeed;
         o["master"] = p.master;
+        if (p.hasGroups) {
+            // Kompakt: Gruppen/Palette nur speichern, wenn sie benutzt werden (NVS ist klein)
+            o["v2"] = true;
+            bool anyCustom = false;
+            for (int g = 0; g < GROUP_COUNT; g++) anyCustom |= p.groups[g].custom;
+            if (anyCustom) groupsToJson(o["groups"].to<JsonArray>(), p.groups, false);
+            if (p.palette.on) paletteToJson(o["palette"].to<JsonObject>(), p.palette);
+        }
     }
+
+    // Gruppen, Palette
+    groupsToJson(doc["groups"].to<JsonArray>(), state.groups, true);
+    paletteToJson(doc["palette"].to<JsonObject>(), state.palette);
+
+    // Nebel
+    JsonObject fog = doc["fog"].to<JsonObject>();
+    fog["channel"]     = state.fogChannel;
+    fog["level"]       = state.fogLevel;
+    fog["onDrop"]      = state.fogOnDrop;
+    fog["dropSec"]     = state.fogDropSec;
+    fog["intervalMin"] = state.fogIntervalMin;
+    fog["intervalSec"] = state.fogIntervalSec;
+
+    // Standby
+    doc["standbyMin"]    = state.standbyMin;
+    doc["standbyPreset"] = state.standbyPreset;
+
+    // Cue-Liste
+    JsonArray cues = doc["cues"].to<JsonArray>();
+    for (auto &c : state.cues) {
+        JsonObject o = cues.add<JsonObject>();
+        o["preset"] = c.preset;
+        o["dur"]    = c.duration;
+        o["beats"]  = c.beats;
+    }
+    doc["cueLoop"] = state.cueLoop;
+
+    // Mikrofon-Kalibrierung
+    JsonObject cal = doc["calibration"].to<JsonObject>();
+    cal["done"]      = state.calibrated;
+    cal["gateKick"]  = state.gateKick;
+    cal["gateSnare"] = state.gateSnare;
+    cal["gateHihat"] = state.gateHihat;
+    cal["refKick"]   = state.refKick;
+    cal["refSnare"]  = state.refSnare;
+    cal["refHihat"]  = state.refHihat;
+    cal["refLevel"]  = state.refLevel;
 
     // Effekt-Einstellungen
     doc["effect"]     = state.currentEffect;
@@ -329,6 +496,19 @@ static bool readConfigFromNVS(JsonDocument &doc) {
         ok = !deserializeJson(doc, buf.data(), len);
         if (!ok) Serial.println("Fehler: Config im NVS ist beschädigt");
     }
+
+    // Presets und Cue-Liste liegen in eigenen Einträgen (ältere Stände: in "config")
+    const char *keys[2] = {NVS_PRESETS_KEY, NVS_CUES_KEY};
+    for (const char *key : keys) {
+        if (!ok || doc[key].is<JsonArray>()) continue;
+        size_t n = prefs.getBytesLength(key);
+        if (n == 0) continue;
+        std::vector<char> buf(n);
+        prefs.getBytes(key, buf.data(), n);
+        JsonDocument part;
+        if (!deserializeJson(part, buf.data(), n)) doc[key] = part;
+        else Serial.printf("Fehler: '%s' im NVS ist beschädigt\n", key);
+    }
     prefs.end();
     return ok;
 }
@@ -380,6 +560,7 @@ void loadConfig() {
         fx.tiltMin = o["tMin"] | 0;
         fx.tiltMax = o["tMax"] | 255;
         fx.isAutoMoving = o["auto"] | false;
+        fx.group = constrain((int)(o["group"] | 0), 0, GROUP_COUNT);
         JsonArray ex = o["extra"].as<JsonArray>();
         for (int e = 0; e < EXTRA_COUNT && e < (int)ex.size(); e++) fx.extra[e] = ex[e] | 0;
         state.fixtures.push_back(fx);
@@ -426,8 +607,53 @@ void loadConfig() {
         p.b          = o["b"]      | 0;
         p.timerSpeed = constrain((int)(o["speed"] | 500), TIMER_SPEED_MIN, TIMER_SPEED_MAX);
         p.master     = constrain((int)(o["master"] | 255), 0, 255);
+        if ((o["v2"] | false) || o["groups"].is<JsonArray>()) {
+            p.hasGroups = true;   // fehlende Gruppen/Palette = nicht benutzt (custom/on = false)
+            groupsFromJson(o["groups"].as<JsonArray>(), p.groups);
+            paletteFromJson(o["palette"].as<JsonObject>(), p.palette);
+        }
         state.presets.push_back(p);
     }
+
+    // Gruppen, Palette
+    groupsFromJson(doc["groups"].as<JsonArray>(), state.groups);
+    paletteFromJson(doc["palette"].as<JsonObject>(), state.palette);
+
+    // Nebel
+    JsonObject fog = doc["fog"].as<JsonObject>();
+    state.fogChannel     = constrain((int)(fog["channel"]     | 0), 0, 512);
+    state.fogLevel       = fog["level"]       | 255;
+    state.fogOnDrop      = fog["onDrop"]      | false;
+    state.fogDropSec     = constrain((int)(fog["dropSec"]     | 3), 1, 30);
+    state.fogIntervalMin = constrain((int)(fog["intervalMin"] | 0), 0, 120);
+    state.fogIntervalSec = constrain((int)(fog["intervalSec"] | 5), 1, 30);
+
+    // Standby
+    state.standbyMin    = constrain((int)(doc["standbyMin"] | 0), 0, 240);
+    state.standbyPreset = doc["standbyPreset"] | "";
+
+    // Cue-Liste
+    state.cues.clear();
+    for (JsonObject o : doc["cues"].as<JsonArray>()) {
+        if (state.cues.size() >= MAX_CUES) break;
+        Cue c;
+        c.preset   = o["preset"] | "";
+        c.duration = constrain((int)(o["dur"] | 16), 1, 9999);
+        c.beats    = o["beats"]  | true;
+        state.cues.push_back(c);
+    }
+    state.cueLoop = doc["cueLoop"] | true;
+
+    // Mikrofon-Kalibrierung
+    JsonObject cal = doc["calibration"].as<JsonObject>();
+    state.calibrated = cal["done"]      | false;
+    state.gateKick   = cal["gateKick"]  | 0.0;
+    state.gateSnare  = cal["gateSnare"] | 0.0;
+    state.gateHihat  = cal["gateHihat"] | 0.0;
+    state.refKick    = cal["refKick"]   | 180000.0;
+    state.refSnare   = cal["refSnare"]  | 190000.0;
+    state.refHihat   = cal["refHihat"]  | 170000.0;
+    state.refLevel   = cal["refLevel"]  | 5000.0;
 
     updateDMXChannelCount();
 

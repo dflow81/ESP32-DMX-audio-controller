@@ -102,11 +102,7 @@ static uint8_t scaleToRange(float w, uint8_t a, uint8_t b) {
 }
 
 void updateMovements() {
-    // 1. Prüfung: Nur bei Disco-Effekten bewegen
-    bool isDiscoEffect = (state.currentEffect == "disco" || state.currentEffect == "disco2");
-    if (!isDiscoEffect) return;
-
-    // 2. Prüfung: Haben wir einen Takt?
+    // 1. Prüfung: Haben wir einen Takt?
     if (state.bpm < 30) return; 
 
     // --- BEAT TRIGGER LOGIK (nur Kreis, wie bisher) ---
@@ -146,6 +142,10 @@ void updateMovements() {
         // Nur Heads bewegen, für die "BPM Auto" eingeschaltet ist;
         // die anderen bleiben dort, wo der Joystick sie hingestellt hat
         if (!fx.isAutoMoving) continue;
+
+        // 2. Prüfung: Nur bei Disco-Effekten bewegen (Haupt- oder Gruppen-Effekt des Heads)
+        const String &eff = effectiveEffect(i);
+        if (eff != "disco" && eff != "disco2") continue;
 
         const FixtureDefinition* def = getFixtureDef(fx.type);
         if (!def || def->offsetPan < 0) continue;
@@ -199,7 +199,10 @@ void cancelFade() {
 
 void updateDMX() {
     updateMovements(); // Vor dem Senden Bewegungen berechnen
-    ensureOutputChannels(state.numChannels); // nach Art-Net-Betrieb wieder normal
+
+    // Nebelmaschine kann hinter den Fixtures liegen → so weit ausgeben
+    int fogIdx = state.fogChannel - 1;          // -1 = keine
+    ensureOutputChannels(max(state.numChannels, state.fogChannel)); // nach Art-Net-Betrieb wieder normal
 
     unsigned long now = millis();
     if (state.fadeRequest) {
@@ -218,9 +221,12 @@ void updateDMX() {
     bool strobing = (long)(state.manualStrobeUntil - now) > 0;
     bool dark = state.blackout && !strobing;
 
-    for (int i = 0; i < state.numChannels; i++) {
-        uint8_t v = state.dmx[i];
-        if (v == 0) v = state.dmxPreview[i];
+    unsigned long nowFog = millis();
+    bool fogOn = fogIdx >= 0 && ((long)(state.fogUntil - nowFog) > 0 || (long)(state.manualFogUntil - nowFog) > 0);
+
+    for (int i = 0; i < outChannels; i++) {
+        uint8_t v = i < state.numChannels ? state.dmx[i] : 0;
+        if (v == 0 && i < state.numChannels) v = state.dmxPreview[i];
 
         // WICHTIG: Master nur auf Helligkeit anwenden, NICHT auf Pan/Tilt
         bool dimmable = isDimmableChannel(i);
@@ -232,6 +238,8 @@ void updateDMX() {
         lastOut[i] = v;
 
         uint8_t out = (dark && dimmable) ? 0 : v;
+        // Nebel: eigener Kanal, unabhängig von Master, Übergängen und Blackout
+        if (i == fogIdx) out = fogOn ? state.fogLevel : 0;
         sentOut[i] = out;
         dmx.writeByte(out, i + 1);
     }

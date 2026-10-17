@@ -105,11 +105,14 @@ void handleDisplay() {
         {"DROP",  state.drop},
         {"PC",    net},
         {"BLACK", state.blackout},
+        {"STBY",  state.standbyActive},
+        {"NEBEL", state.fogChannel > 0 && ((long)(state.fogUntil - now) > 0 || (long)(state.manualFogUntil - now) > 0)},
     };
     int x = 0;
     for (auto &f : flags) {
         if (!f.on) continue;
         int w = strlen(f.text) * 6 + 3;
+        if (x + w > DISPLAY_WIDTH) break;   // passt nicht mehr in die Zeile
         oled.fillRect(x, 48, w, 9, SSD1306_WHITE);
         oled.setTextColor(SSD1306_BLACK);
         oled.setCursor(x + 2, 49);
@@ -119,7 +122,7 @@ void handleDisplay() {
     }
 
     // --- Pegelbalken ---
-    float level = constrain(state.level / 5000.0f, 0.0f, 1.0f);
+    float level = constrain(state.level / max(1.0, state.refLevel), 0.0, 1.0);
     oled.drawRect(0, 59, DISPLAY_WIDTH, 5, SSD1306_WHITE);
     oled.fillRect(0, 59, (int)(level * DISPLAY_WIDTH), 5, SSD1306_WHITE);
 

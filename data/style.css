@@ -368,3 +368,89 @@ input[type="range"]:disabled {
     color: #4fc3f7;
     font-size: 12px;
 }
+
+/* Spektrum */
+.spec {
+    width: 100%;
+    margin-top: 10px;
+    display: block;
+}
+
+/* Kleiner Knopf */
+.btn-small {
+    margin-top: 10px;
+    padding: 6px 10px;
+    font-size: 12px;
+}
+
+/* Einmessen */
+.cal-panel {
+    margin-top: 10px;
+    padding: 10px;
+    border: 1px solid #333;
+    border-radius: 8px;
+    font-size: 13px;
+}
+.cal-step { margin-bottom: 8px; }
+.cal-bar { height: 6px; background: #333; border-radius: 3px; overflow: hidden; margin: 8px 0; }
+.cal-bar div { height: 100%; width: 0; background: #4fc3f7; transition: width .2s; }
+
+/* Nebel-Knopf */
+.btn-fog {
+    flex: 1;
+    padding: 18px;
+    font-weight: bold;
+    letter-spacing: 2px;
+    background: #2a2a35;
+    border: 1px solid #667;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+}
+.btn-fog.on { background: #ccd; color: #000; box-shadow: 0 0 16px #ccd; }
+
+/* Palette */
+.palette-row { display: flex; gap: 10px; margin-top: 10px; }
+.palette-row input[type="color"] { width: 48px; height: 36px; border: none; background: none; padding: 0; cursor: pointer; }
+
+/* Gruppen */
+.group-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #2a2a2a;
+    font-size: 13px;
+}
+.group-row input[type="text"], .cue-row input[type="number"] {
+    width: 110px;
+    padding: 6px 8px;
+    background: #2a2a2a;
+    color: #eee;
+    border: 1px solid #444;
+    border-radius: 6px;
+}
+.group-row select, .cue-row select {
+    padding: 6px 8px;
+    background: #2a2a2a;
+    color: #eee;
+    border: 1px solid #444;
+    border-radius: 6px;
+}
+.group-row input[type="color"] { width: 40px; height: 30px; border: none; background: none; padding: 0; }
+.group-row label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+
+/* Cue-Liste */
+.cue-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    padding: 4px;
+    border-radius: 6px;
+}
+.cue-row.active { background: #1d3a4a; }
+.cue-row input[type="number"] { width: 70px; }
+.cue-nr { width: 20px; text-align: right; color: #888; font-size: 12px; }

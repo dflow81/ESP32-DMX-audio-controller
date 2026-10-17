@@ -26,6 +26,7 @@
                 <th>Start</th>
                 <th>Bereich (Belegt)</th>
                 <th>Typ</th>
+                <th>Gruppe</th>
                 <th>Aktion</th>
             </tr>
         </thead>
@@ -74,6 +75,24 @@
 <button class="btn-save" onclick="saveConfig()">Konfiguration speichern</button>
 
 <div class="box">
+    <h2>Nebelmaschine</h2>
+    <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:center;">
+        <label>DMX-Kanal <input id="fogChannel" type="number" min="0" max="512" style="width:80px;" onchange="saveFog()"></label>
+        <label>Stärke (0–255) <input id="fogLevel" type="number" min="0" max="255" style="width:80px;" onchange="saveFog()"></label>
+        <label>Stoß bei Drop <input id="fogDropSec" type="number" min="1" max="30" style="width:60px;" onchange="saveFog()"> s</label>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin-top:10px;">
+        <label>Automatisch alle <input id="fogIntervalMin" type="number" min="0" max="120" style="width:60px;" onchange="saveFog()"> Min</label>
+        <label>für <input id="fogIntervalSec" type="number" min="1" max="30" style="width:60px;" onchange="saveFog()"> s</label>
+    </div>
+    <p style="font-size:12px; color:#888;">
+        Kanal 0 = keine Nebelmaschine. Den Kanal nicht für eine Lampe verwenden.
+        „Alle 0 Min“ = kein automatischer Nebel. Ob bei Drops genebelt wird, stellst du auf der Startseite ein.
+        Der Nebelkanal wirkt unabhängig von Master und Blackout.
+    </p>
+</div>
+
+<div class="box">
     <h2>PC-Steuerung (Art-Net / sACN)</h2>
     <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
         <input type="checkbox" id="netInput" onchange="saveNet()"> Steuerung per Art-Net / sACN erlauben
@@ -103,6 +122,12 @@ async function loadConfig() {
         document.getElementById("netInput").checked = !!config.netInput;
         document.getElementById("netUniverse").value = config.netUniverse || 1;
         if (config.ip) document.getElementById("netIp").textContent = config.ip;
+        const fog = config.fog || {};
+        document.getElementById("fogChannel").value = fog.channel || 0;
+        document.getElementById("fogLevel").value = fog.level ?? 255;
+        document.getElementById("fogDropSec").value = fog.dropSec || 3;
+        document.getElementById("fogIntervalMin").value = fog.intervalMin || 0;
+        document.getElementById("fogIntervalSec").value = fog.intervalSec || 5;
     } catch (e) { console.error("Ladefehler:", e); }
 }
 
@@ -144,6 +169,13 @@ function renderFixtures() {
                 <select onchange="editFixture(${i}, 'type', this.value); renderFixtures();">
                     ${Object.keys(config.fixtureTypes).map(t => `
                         <option value="${t}" ${fx.type === t ? "selected" : ""}>${t}</option>
+                    `).join("")}
+                </select>
+            </td>
+            <td>
+                <select onchange="editFixture(${i}, 'group', parseInt(this.value))">
+                    ${[0, 1, 2, 3, 4].map(g => `
+                        <option value="${g}" ${(fx.group || 0) === g ? "selected" : ""}>${g === 0 ? "–" : groupName(g)}</option>
                     `).join("")}
                 </select>
             </td>
@@ -218,6 +250,17 @@ function addType() {
 }
 
 function deleteType(name) { delete config.fixtureTypes[name]; renderTypes(); renderFixtures(); }
+
+function groupName(g) {
+    const grp = (config.groups || [])[g - 1];
+    return (grp && grp.name) ? grp.name : "Gruppe " + g;
+}
+
+function saveFog() {
+    const v = id => parseInt(document.getElementById(id).value) || 0;
+    fetch(`/api/settings?fogChannel=${v("fogChannel")}&fogLevel=${v("fogLevel")}` +
+          `&fogDropSec=${v("fogDropSec")}&fogIntervalMin=${v("fogIntervalMin")}&fogIntervalSec=${v("fogIntervalSec")}`);
+}
 
 function saveNet() {
     const on = document.getElementById("netInput").checked ? 1 : 0;
