@@ -123,6 +123,7 @@ bool detectDrop(double rawEnergy, bool kick, double kickEnergy, unsigned long si
     bool energyDrop    = grooveKicks >= DROP_MIN_GROOVE_KICKS && strongKick && ratio > DROP_ENERGY_RATIO;
 
     if (breakdownDrop || energyDrop) {
+        if (!state.dropEnabled) return false; // In der Web-UI abgeschaltet
         lastDrop = now;
         grooveBeforeBreak = 0;
         Serial.printf(">>> DROP DETECTED (%s) <<<\n", breakdownDrop ? "Breakdown" : "Energie");

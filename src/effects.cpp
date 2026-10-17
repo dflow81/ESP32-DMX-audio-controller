@@ -391,6 +391,17 @@ void effectRetro() {
 
 
 // --------------------------------------------------
+// MANUELLER STROBE (Knopf in der Web-UI)
+// --------------------------------------------------
+void effectManualStrobe() {
+    // Feste ~12 Hz, unabhängig vom Effekt-Speed (wie der Drop-Strobe)
+    uint8_t s = ((millis() / 40) % 2 == 0) ? 255 : 0;
+    for (int i = 0; i < state.fixtures.size(); i++) {
+        setFixtureColor(i, s, s, s, 255);
+    }
+}
+
+// --------------------------------------------------
 // RUN EFFECT (Zentrale Steuerung)
 // --------------------------------------------------
 void runEffect(const String& name) {

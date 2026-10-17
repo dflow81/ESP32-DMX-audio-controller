@@ -4,6 +4,7 @@
 #include <ArduinoJson.h>
 #include <ESPAsyncWebServer.h>
 #include <WiFi.h>
+#include "ota.h"
 
 // Definition des Webservers
 AsyncWebServer server(80);  
@@ -66,6 +67,27 @@ void setupWeb() {
         if (req->hasParam("value")) {
             state.audioThreshold = req->getParam("value")->value().toInt();
             markConfigDirty();
+            req->send(200, "text/plain", "OK");
+        } else { req->send(400, "text/plain", "Error"); }
+    });
+
+    // API: Drop-Erkennung an/aus
+    server.on("/api/setDrop", HTTP_GET, [](AsyncWebServerRequest *req){
+        if (req->hasParam("on")) {
+            state.dropEnabled = req->getParam("on")->value().toInt() != 0;
+            if (!state.dropEnabled) state.drop = false;
+            markConfigDirty();
+            req->send(200, "text/plain", "OK");
+        } else { req->send(400, "text/plain", "Error"); }
+    });
+
+    // API: Strobe-Knopf. Die UI sendet on=1 wiederholt, solange der Knopf gedrückt ist;
+    // bleibt das aus (Verbindung weg), endet der Strobe nach STROBE_KEEPALIVE_MS von selbst
+    server.on("/api/strobe", HTTP_GET, [](AsyncWebServerRequest *req){
+        const unsigned long STROBE_KEEPALIVE_MS = 600;
+        if (req->hasParam("on")) {
+            bool on = req->getParam("on")->value().toInt() != 0;
+            state.manualStrobeUntil = on ? millis() + STROBE_KEEPALIVE_MS : 0;
             req->send(200, "text/plain", "OK");
         } else { req->send(400, "text/plain", "Error"); }
     });
@@ -221,6 +243,7 @@ void setupWeb() {
         doc["master"] = state.master;
         doc["effect"] = state.currentEffect;
         doc["audioThreshold"] = state.audioThreshold;
+        doc["dropEnabled"] = state.dropEnabled;
         String json;
         serializeJson(doc, json);
         req->send(200, "application/json", json);
@@ -297,6 +320,8 @@ void setupWeb() {
     server.on("/wifi", HTTP_GET, [](AsyncWebServerRequest *req){ req->send(LittleFS, "/wifi.html", "text/html"); });
     server.on("/dmxconfig", HTTP_GET, [](AsyncWebServerRequest *req){ req->send(LittleFS, "/dmxconfig.html", "text/html"); });
     server.on("/mh", HTTP_GET, [](AsyncWebServerRequest *req){ req->send(LittleFS, "/moving_head.html", "text/html"); });
+
+    setupOTA(); // Update-Seite /update + ArduinoOTA
 
     server.begin();
     Serial.println("Webserver mit allen MH & Audio Erweiterungen gestartet.");

@@ -16,6 +16,7 @@
     <a href="/wifi">WLAN</a>
     <a href="/dmxconfig">DMX</a>
     <a href="/mh" >Moving Head</a>
+    <a href="/update">Update</a>
 </div>
 
 <div class="container">
@@ -56,6 +57,14 @@
             </div>
 
             <div style="margin-top: 20px;">
+                <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                    <input type="checkbox" id="dropEnabled" checked
+                           onchange="saveDrop(this.checked)">
+                    <span>Drop-Erkennung</span>
+                </label>
+            </div>
+
+            <div style="margin-top: 20px;">
                 <span> Effekt Speed</span> 
                 <input id="timerFader" type="range" min="50" max="2000" value="500"
                        oninput="setTimer()">
@@ -89,6 +98,7 @@
         <div id="effectButtons" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; margin-top: 15px;">
             <!-- Buttons werden per JS generiert -->
         </div>
+        <button id="strobeBtn" class="btn-strobe">STROBE (gedrückt halten)</button>
     </div>
 
 </div>
@@ -111,6 +121,7 @@ const radius = canvas.width / 2;
 
 window.onload = () => {
     buildEffectButtons();
+    setupStrobeButton();
     loadConfig();
     drawCircle();
     setInterval(updateStatus, 100);
@@ -143,6 +154,9 @@ function loadConfig() {
         if(!isDragging) {
             document.getElementById("master").value = data.master;
             document.getElementById("masterVal").textContent = data.master;
+            if(data.dropEnabled !== undefined) {
+                document.getElementById("dropEnabled").checked = data.dropEnabled;
+            }
             if(data.audioThreshold) {
                 document.getElementById("threshold").value = data.audioThreshold;
                 document.getElementById("thresholdVal").textContent = data.audioThreshold;
@@ -175,6 +189,31 @@ function previewMaster(v) { document.getElementById("masterVal").textContent = v
 function saveMaster(v) { fetch("/api/setMaster?value=" + v); }
 function previewThreshold(v) { document.getElementById("thresholdVal").textContent = v; }
 function saveThreshold(v) { fetch("/api/setThreshold?value=" + v); }
+// Strobe-Knopf: solange gedrückt, alle 250 ms "on" senden (ESP stoppt nach 600 ms ohne Signal)
+let strobeTimer = null;
+function strobeStart(e) {
+    e.preventDefault();
+    if (strobeTimer) return;
+    document.getElementById("strobeBtn").classList.add("on");
+    fetch("/api/strobe?on=1");
+    strobeTimer = setInterval(() => fetch("/api/strobe?on=1"), 250);
+}
+function strobeStop() {
+    if (!strobeTimer) return;
+    clearInterval(strobeTimer);
+    strobeTimer = null;
+    document.getElementById("strobeBtn").classList.remove("on");
+    fetch("/api/strobe?on=0");
+}
+function setupStrobeButton() {
+    const btn = document.getElementById("strobeBtn");
+    btn.addEventListener("pointerdown", strobeStart);
+    ["pointerup", "pointerleave", "pointercancel"].forEach(ev => btn.addEventListener(ev, strobeStop));
+    btn.addEventListener("contextmenu", e => e.preventDefault()); // kein Langdruck-Menü am Handy
+    window.addEventListener("blur", strobeStop);
+}
+
+function saveDrop(on) { fetch("/api/setDrop?on=" + (on ? 1 : 0)); }
 function setTimer() {
     const t = document.getElementById("timerFader").value;
     document.getElementById("timerVal").textContent = t;

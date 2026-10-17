@@ -6,6 +6,7 @@
 #include "web.h"
 #include "effects.h"
 #include "wifi.h"
+#include "ota.h"
 
 // 1. Extern bekannt machen
 extern void taskAudio(void *pv); 
@@ -13,6 +14,7 @@ extern void taskAudio(void *pv);
 // 2. Effekt Task (Core 1)
 void effectTask(void *param) {
     uint32_t lastBeatCount = state.beatCount;
+    bool wasStrobing = false;
 
     while (true) {
         int delayTime;
@@ -22,7 +24,7 @@ void effectTask(void *param) {
             // --- SPEICHER-CHECK ---
             // Prüft alle paar Millisekunden, ob seit 5 Sek. nichts mehr am Webinterface 
             // gedreht wurde und speichert dann einmalig den Flash-Speicher.
-            handleAutoSave(); 
+            if (!state.otaActive) handleAutoSave(); 
 
             // DMX-Schnittstelle neu starten, wenn die Web-UI die Config geändert hat
             if (state.dmxReinit) {
@@ -39,14 +41,26 @@ void effectTask(void *param) {
 
             // --- EFFEKT-LOGIK ---
             const String &fx = state.currentEffect;
-            if (fx != "none" && fx != "") {
+            bool hasEffect = (fx != "none" && fx != "");
+            bool strobing = (long)(state.manualStrobeUntil - millis()) > 0;
+
+            if (strobing) {
+                // Strobe-Knopf gedrückt → überschreibt den Effekt
+                effectManualStrobe();
+                updateDMX();
+            } else if (hasEffect) {
                 runEffect(fx);
                 updateDMX();
+            } else if (wasStrobing) {
+                // Ohne Effekt nach dem Strobe dunkel schalten statt auf Weiß stehen zu bleiben
+                for (int i = 0; i < (int)state.fixtures.size(); i++) setFixtureColor(i, 0, 0, 0, 0);
+                updateDMX();
             }
+            wasStrobing = strobing;
 
             // Dynamisches Delay
             bool audioFx = (fx == "disco" || fx == "disco2" || fx == "retro");
-            delayTime = audioFx ? 20 : (state.timerSpeed / 20);
+            delayTime = strobing ? 10 : audioFx ? 20 : (state.timerSpeed / 20);
         }
         vTaskDelay(pdMS_TO_TICKS(max(10, delayTime)));
     }
@@ -74,7 +88,8 @@ void setup() {
 }
 
 void loop() {
-    // Da wir FreeRTOS Tasks nutzen, kann die Loop leer bleiben oder für 
-    // sehr langsame Hintergrundprozesse genutzt werden.
-    vTaskDelay(pdMS_TO_TICKS(1000)); 
+    // Effekte und Audio laufen in eigenen FreeRTOS-Tasks;
+    // die Loop kümmert sich nur noch um OTA-Updates
+    handleOTA();
+    vTaskDelay(pdMS_TO_TICKS(10)); 
 }

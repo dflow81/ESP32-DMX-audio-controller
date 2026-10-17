@@ -46,6 +46,7 @@ struct ControllerState {
     uint8_t dmxPreview[512];
     bool dimmable[512];          // Vorberechnet: Kanal wird vom Master gedimmt
     int numChannels = 0;
+    volatile bool otaActive = false; // OTA-Update läuft → nicht in den Flash speichern
     volatile bool dmxReinit = false; // Web-UI fordert Neustart der DMX-Schnittstelle an
     std::vector<Fixture> fixtures;
     std::map<String, FixtureDefinition> fixtureTypes;
@@ -69,6 +70,7 @@ struct ControllerState {
     double level = 0.0;     
     double gain = 1.0;      
     bool autoGain = true;
+    bool dropEnabled = true; // Drop-Erkennung (z. B. für Schlager abschaltbar)
 
     // Frequenz-Energiewerte
     double kickEnergy = 0.0;
@@ -85,6 +87,7 @@ struct ControllerState {
     Mode mode = MODE_AUDIO; 
     int chaseIndex = 0;
     int timerSpeed = 500;
+    volatile unsigned long manualStrobeUntil = 0; // Strobe-Knopf: aktiv bis zu diesem millis()-Wert
     bool strobeOnFastBass = false;
     int audioThreshold = 45; // Standardwert
 };

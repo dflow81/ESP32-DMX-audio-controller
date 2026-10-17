@@ -32,6 +32,9 @@ void effectDisco();
 void effectDisco2();
 void effectRetro();
 
+// Manueller Strobe (Knopf in der Web-UI), überschreibt den laufenden Effekt
+void effectManualStrobe();
+
 // Hilfsfunktion für Timer-Speed
 float getT();
 

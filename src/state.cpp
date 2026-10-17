@@ -111,6 +111,7 @@ void saveConfig() {
     
     // NEU: Audio Threshold speichern
     doc["audioThreshold"] = state.audioThreshold;
+    doc["dropEnabled"]    = state.dropEnabled;
 
     // Effekt-Einstellungen
     doc["effect"]     = state.currentEffect;
@@ -221,6 +222,7 @@ void loadConfig() {
     state.wifi_ssid      = doc["wifi_ssid"]      | "";
     state.wifi_pass      = doc["wifi_pass"]      | "";
     state.audioThreshold = doc["audioThreshold"] | 45; // Laden oder Default
+    state.dropEnabled    = doc["dropEnabled"]    | true;
     state.currentEffect  = doc["effect"]         | "static";
     state.timerSpeed     = constrain((int)(doc["timerSpeed"] | 500), TIMER_SPEED_MIN, TIMER_SPEED_MAX);
     state.colorR         = doc["colorR"]         | 255;
