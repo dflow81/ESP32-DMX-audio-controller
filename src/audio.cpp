@@ -19,8 +19,6 @@ ArduinoFFT<double> FFT = ArduinoFFT<double>(vReal, vImag, SAMPLE_COUNT, SAMPLE_R
 #define HISTORY_SIZE 32 
 
 struct BeatDetector {
-    double history[HISTORY_SIZE];
-    int index = 0;
     unsigned long lastHit = 0;
     double currentAvg = 0;
 
@@ -37,9 +35,6 @@ struct BeatDetector {
             lastHit = millis();
             currentAvg *= 1.2; 
         }
-
-        history[index] = energy;
-        index = (index + 1) % HISTORY_SIZE;
         return isHit;
     }
 };
@@ -47,10 +42,26 @@ struct BeatDetector {
 BeatDetector kickDet, snareDet, hihatDet;
 
 unsigned long lastKickTime = 0;
-unsigned long lastHiHatTimes[20];
-int hihatIndex = 0;
-double energyHistory = 1.0;
+
+// ------------------------------------------------------------
+// Drop-Erkennung
+// Typischer Drop: Groove läuft → Breakdown ohne Kick → erster kräftiger Kick.
+// Zweiter Weg: plötzlicher starker Energiesprung (vor dem Auto-Gain gemessen).
+// ------------------------------------------------------------
+#define DROP_BREAK_MIN_MS    1500   // So lange darf kein Kick kommen, damit es als Breakdown zählt
+#define DROP_BREAK_MAX_MS   30000   // Längere Pausen = Musik war aus, kein Drop
+#define DROP_MIN_GROOVE_KICKS   8   // So viele Kicks am Stück müssen vor dem Breakdown gelaufen sein
+#define DROP_KICK_STRENGTH    0.7   // Kick nach dem Breakdown muss >= 70% eines normalen Kicks haben
+#define DROP_ENERGY_RATIO     2.0   // Energiesprung kurz/lang für den zweiten Erkennungsweg
+#define DROP_LOCKOUT_MS      8000   // Mindestabstand zwischen zwei Drops
+#define DROP_HOLD_MS         1200   // So lange bleibt state.drop aktiv
+
 unsigned long lastDrop = 0;
+int    grooveKicks = 0;       // Kicks in Folge (Abstand < DROP_BREAK_MIN_MS)
+int    grooveBeforeBreak = 0; // Groove-Länge vor dem aktuellen Breakdown
+double kickAvg = 0;           // Durchschnittliche Stärke eines normalen Kicks
+double energyShort = 0;       // Energie der letzten ~100 ms
+double energyLong = 0;        // Energie der letzten ~2-3 s
 
 // ------------------------------------------------------------
 // Hilfsfunktionen
@@ -75,24 +86,46 @@ void updateKickBPM() {
     lastKickTime = now;
 }
 
-bool detectDrop(double totalEnergy, bool kick, bool hihat) {
+// rawEnergy und kickEnergy müssen VOR dem Auto-Gain gemessen sein,
+// sonst gleicht der Gain den Lautstärkesprung des Drops sofort aus.
+// sinceLastKick = Zeit seit dem vorherigen Kick (vor diesem Frame)
+bool detectDrop(double rawEnergy, bool kick, double kickEnergy, unsigned long sinceLastKick) {
     unsigned long now = millis();
-    if (hihat) {
-        lastHiHatTimes[hihatIndex] = now;
-        hihatIndex = (hihatIndex + 1) % 20;
-    }
-    int hihatRate = 0;
-    for (int i = 0; i < 20; i++) {
-        if (now - lastHiHatTimes[i] < 1200) hihatRate++; 
-    }
-    double ratio = totalEnergy / (energyHistory + 1.0);
-    energyHistory = (energyHistory * 0.98) + (totalEnergy * 0.02); 
 
-    if (now - lastDrop < 5000) return false;
+    // Kurz- und Langzeit-Energie (ein Frame ≈ 23 ms)
+    energyShort = energyShort * 0.7  + rawEnergy * 0.3;
+    energyLong  = energyLong  * 0.99 + rawEnergy * 0.01;
 
-    if (hihatRate > 7 && kick && ratio > 1.35) {
+    if (!kick) return false;
+
+    bool afterBreak = sinceLastKick >= DROP_BREAK_MIN_MS && sinceLastKick <= DROP_BREAK_MAX_MS;
+    if (afterBreak) {
+        grooveBeforeBreak = grooveKicks;
+        grooveKicks = 0;
+    }
+    grooveKicks++;
+
+    bool kickLearned = kickAvg > 0 && grooveBeforeBreak >= DROP_MIN_GROOVE_KICKS;
+    bool strongKick  = kickEnergy >= kickAvg * DROP_KICK_STRENGTH;
+    double ratio     = energyShort / (energyLong + 1.0);
+
+    // Normale Kicks (nicht direkt nach einem Breakdown) lernen die Kick-Stärke
+    if (!afterBreak) kickAvg = (kickAvg == 0) ? kickEnergy : kickAvg * 0.9 + kickEnergy * 0.1;
+
+    if (afterBreak) {
+        Serial.printf("Kick nach Breakdown: Pause %lums, Groove %d, Kick %.0f / Avg %.0f, Ratio %.2f\n",
+                      sinceLastKick, grooveBeforeBreak, kickEnergy, kickAvg, ratio);
+    }
+
+    if (now - lastDrop < DROP_LOCKOUT_MS) return false;
+
+    bool breakdownDrop = afterBreak && kickLearned && strongKick;
+    bool energyDrop    = grooveKicks >= DROP_MIN_GROOVE_KICKS && strongKick && ratio > DROP_ENERGY_RATIO;
+
+    if (breakdownDrop || energyDrop) {
         lastDrop = now;
-        Serial.println(">>> DROP DETECTED <<<");
+        grooveBeforeBreak = 0;
+        Serial.printf(">>> DROP DETECTED (%s) <<<\n", breakdownDrop ? "Breakdown" : "Energie");
         return true;
     }
     return false;
@@ -111,7 +144,7 @@ void setupI2S() {
         .use_apll = false
     };
     const i2s_pin_config_t pin_config = {
-        .bck_io_num = 21, .ws_io_num = 5, .data_out_num = -1, .data_in_num = 26
+        .bck_io_num = 18, .ws_io_num = 5, .data_out_num = -1, .data_in_num = 19
     };
     i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
     i2s_set_pin(I2S_NUM_0, &pin_config);
@@ -163,21 +196,25 @@ void taskAudio(void *pv) {
         bool isSnare = snareDet.detect(sRaw, 1.3, 140, (double)state.audioThreshold * 0.6);
         bool isHihat = hihatDet.detect(hRaw, 1.5, 70, (double)state.audioThreshold * 0.3);
 
-        state.beat = isKick;
+        unsigned long sinceLastKick = millis() - lastKickTime; // vor updateKickBPM() merken
         if (isKick) {
+            state.lastBeatMs = millis();
+            state.beatCount++;   // Effekt-Task wertet die Änderung aus
             updateKickBPM();
         } else if (millis() - lastKickTime > 4000) {
             state.bpm = 0; 
         }
 
+        // Gesamtenergie vor dem Auto-Gain (wie kRaw/sRaw/hRaw)
         double totalE = 0;
         for(int i=2; i<250; i++) totalE += vReal[i];
+        totalE /= (state.gain + 0.1);
 
-        if (detectDrop(totalE, isKick, isHihat)) {
+        if (detectDrop(totalE, isKick, kRaw, sinceLastKick)) {
             state.drop = true;
             dropStartTime = millis();
         }
-        if (state.drop && (millis() - dropStartTime > 1200)) {
+        if (state.drop && (millis() - dropStartTime > DROP_HOLD_MS)) {
             state.drop = false;
         }
 

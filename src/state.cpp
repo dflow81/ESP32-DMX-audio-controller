@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 
 ControllerState state;
+SemaphoreHandle_t stateMutex = nullptr;
 
 // ----------------------------------------------------
 // Default Fixture-Typen laden
@@ -14,7 +15,7 @@ void loadDefaultFixtureTypes() {
     state.fixtureTypes["RGBW4"] = {4, -1, 0, 1, 2, 3, -1, -1};
     state.fixtureTypes["PAR7"]  = {7, 0, 1, 2, 3, 4, -1, -1};
     state.fixtureTypes["MH14"]  = {14, 6, 7, 8, 9, 10, 0, 1};
-    state.fixtureTypes["DRGB"]  = {7, 0, 1, 2, 3, -1, -1, 1};
+    state.fixtureTypes["DRGB"]  = {7, 0, 1, 2, 3, -1, -1, -1};
 }
 
 // ----------------------------------------------------
@@ -36,15 +37,35 @@ int getFixtureStartAddress(int fixtureIndex) {
 }
 
 // ----------------------------------------------------
-// DMX Kanalanzahl berechnen
+// DMX Kanalanzahl + Dimm-Maske berechnen
 // ----------------------------------------------------
+static void markDimmable(int base, int offset) {
+    if (offset < 0) return;
+    int ch = base + offset;
+    if (ch >= 0 && ch < 512) state.dimmable[ch] = true;
+}
+
 void updateDMXChannelCount() {
     int maxChannel = 0;
+    memset(state.dimmable, 0, sizeof(state.dimmable));
+
     for (auto &fx : state.fixtures) {
         const FixtureDefinition *def = getFixtureDef(fx.type);
         if (!def) continue;
         int end = fx.start + def->channels - 1;
         if (end > maxChannel) maxChannel = end;
+
+        // Master nur einmal anwenden: auf den Dimmer-Kanal, falls vorhanden,
+        // sonst auf die Farbkanäle (sonst wirkt der Master quadratisch)
+        int base = fx.start - 1;
+        if (def->offsetDimmer >= 0) {
+            markDimmable(base, def->offsetDimmer);
+        } else {
+            markDimmable(base, def->offsetR);
+            markDimmable(base, def->offsetG);
+            markDimmable(base, def->offsetB);
+            markDimmable(base, def->offsetW);
+        }
     }
     state.numChannels = maxChannel;
     if (state.numChannels > 512) state.numChannels = 512;
@@ -91,11 +112,18 @@ void saveConfig() {
     // NEU: Audio Threshold speichern
     doc["audioThreshold"] = state.audioThreshold;
 
+    // Effekt-Einstellungen
+    doc["effect"]     = state.currentEffect;
+    doc["timerSpeed"] = state.timerSpeed;
+    doc["colorR"]     = state.colorR;
+    doc["colorG"]     = state.colorG;
+    doc["colorB"]     = state.colorB;
+
     File f = LittleFS.open("/config.json", "w");
     if (f) {
         serializeJson(doc, f);
         f.close();
-        Serial.println("Config gespeichert (inkl. Audio Threshold)");
+        Serial.println("Config gespeichert");
     }
 }
 
@@ -162,7 +190,7 @@ void loadConfig() {
     for (JsonObject o : arr) {
         Fixture fx;
         fx.name  = o["name"]  | "Fixture";
-        fx.start = o["start"] | 1;
+        fx.start = constrain((int)(o["start"] | 1), 1, 512);
         fx.type  = o["type"]  | "PAR7";
         fx.panMin = o["pMin"] | 0;
         fx.panMax = o["pMax"] | 255;
@@ -193,6 +221,11 @@ void loadConfig() {
     state.wifi_ssid      = doc["wifi_ssid"]      | "";
     state.wifi_pass      = doc["wifi_pass"]      | "";
     state.audioThreshold = doc["audioThreshold"] | 45; // Laden oder Default
+    state.currentEffect  = doc["effect"]         | "static";
+    state.timerSpeed     = constrain((int)(doc["timerSpeed"] | 500), TIMER_SPEED_MIN, TIMER_SPEED_MAX);
+    state.colorR         = doc["colorR"]         | 255;
+    state.colorG         = doc["colorG"]         | 0;
+    state.colorB         = doc["colorB"]         | 0;
 
     updateDMXChannelCount();
     Serial.println("Config geladen");
@@ -202,6 +235,7 @@ void loadConfig() {
 // State initialisieren
 // ----------------------------------------------------
 void initState() {
+    if (!stateMutex) stateMutex = xSemaphoreCreateMutex();
     memset(state.dmx, 0, 512);
     memset(state.dmxPreview, 0, 512);
     loadConfig();

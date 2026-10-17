@@ -8,19 +8,24 @@
 // Definition des Webservers
 AsyncWebServer server(80);  
 
-unsigned long lastChangeTime = 0;
-bool configDirty = false;
-extern void setupDMX();
+volatile unsigned long lastChangeTime = 0;
+volatile bool configDirty = false;
+volatile bool configSaveNow = false;
+
+// Max. Größe für /api/saveConfig (schützt vor zu großen Requests)
+#define MAX_CONFIG_BODY 16384
 
 void markConfigDirty() {
     lastChangeTime = millis();
     configDirty = true;
 }
 
+// Wird vom Effekt-Task aufgerufen (hält dabei den StateLock)
 void handleAutoSave() {
-    if (configDirty && (millis() - lastChangeTime > 5000)) {
-        saveConfig();
+    if (configSaveNow || (configDirty && (millis() - lastChangeTime > 5000))) {
+        configSaveNow = false;
         configDirty = false;
+        saveConfig();
         Serial.println(">>> Flash: Auto-Save (Farbe/Master/MH-Bounds) erledigt.");
     }
 }
@@ -44,7 +49,7 @@ void setupWeb() {
     server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *req){
         JsonDocument doc;
         doc["level"]  = constrain(state.level / 5000.0f, 0.0f, 1.0f);
-        doc["beat"]   = state.beat;
+        doc["beat"]   = (millis() - state.lastBeatMs) < 150; // kurz "halten", damit die UI ihn sieht
         doc["drop"]   = state.drop;
         doc["bpm"]    = (isnan(state.bpm) || state.bpm < 10) ? 0 : (int)state.bpm;
         doc["master"] = state.master;
@@ -98,12 +103,15 @@ void setupWeb() {
             int id = req->getParam("id")->value().toInt();
             uint8_t p = req->getParam("p")->value().toInt();
             uint8_t t = req->getParam("t")->value().toInt();
+            StateLock lock;
             if(id >= 0 && id < (int)state.fixtures.size()) {
                 state.fixtures[id].isAutoMoving = false; 
                 setFixtureMovement(id, p, t);
                 req->send(200, "text/plain", "OK");
+                return;
             }
-        } else { req->send(400, "text/plain", "Error"); }
+        }
+        req->send(400, "text/plain", "Error");
     });
 
     // API: Pan/Tilt Eckpunkte A/B speichern
@@ -111,11 +119,13 @@ void setupWeb() {
         if (req->hasParam("id") && req->hasParam("pt")) {
             int id = req->getParam("id")->value().toInt();
             String pt = req->getParam("pt")->value();
+            StateLock lock;
             if(id >= 0 && id < (int)state.fixtures.size()) {
                 auto &fx = state.fixtures[id];
                 const FixtureDefinition* def = getFixtureDef(fx.type);
                 int base = fx.start - 1;
-                if(def && def->offsetPan >= 0) {
+                if(def && def->offsetPan >= 0 && def->offsetTilt >= 0 &&
+                   base + max(def->offsetPan, def->offsetTilt) < 512) {
                     if(pt == "A") { 
                         fx.panMin = state.dmx[base+def->offsetPan]; 
                         fx.tiltMin = state.dmx[base+def->offsetTilt]; 
@@ -136,16 +146,20 @@ void setupWeb() {
     server.on("/api/toggleAuto", HTTP_GET, [](AsyncWebServerRequest *req){
         if (req->hasParam("id")) {
             int id = req->getParam("id")->value().toInt();
+            StateLock lock;
             if(id >= 0 && id < (int)state.fixtures.size()) {
                 state.fixtures[id].isAutoMoving = !state.fixtures[id].isAutoMoving;
                 req->send(200, "text/plain", state.fixtures[id].isAutoMoving ? "ON" : "OFF");
+                return;
             }
         }
+        req->send(400, "text/plain", "Error");
     });
 
     // API: Standard DMX Steuerung
     server.on("/api/setColor", HTTP_GET, [](AsyncWebServerRequest *req){
         if (req->hasParam("hex")) {
+            StateLock lock;
             hexToRGB(req->getParam("hex")->value(), state.colorR, state.colorG, state.colorB);
             state.currentEffect = "static"; 
             markConfigDirty();
@@ -155,7 +169,7 @@ void setupWeb() {
 
     server.on("/api/setMaster", HTTP_GET, [](AsyncWebServerRequest *req){
         if (req->hasParam("value")) {
-            state.master = req->getParam("value")->value().toInt();
+            state.master = constrain(req->getParam("value")->value().toInt(), 0, 255);
             markConfigDirty();
         }
         req->send(200, "text/plain", "OK");
@@ -163,7 +177,9 @@ void setupWeb() {
 
     server.on("/api/setEffect", HTTP_GET, [](AsyncWebServerRequest *req){
         if (req->hasParam("name")) {
-            state.currentEffect = req->getParam("name")->value();
+            String name = req->getParam("name")->value();
+            StateLock lock;
+            state.currentEffect = name;
             markConfigDirty();
         }
         req->send(200, "text/plain", "OK");
@@ -171,7 +187,7 @@ void setupWeb() {
     // API: Effekt-Geschwindigkeit (Timer) setzen
     server.on("/api/setTimer", HTTP_GET, [](AsyncWebServerRequest *req){
         if (req->hasParam("ms")) {
-            state.timerSpeed = req->getParam("ms")->value().toInt();
+            state.timerSpeed = constrain(req->getParam("ms")->value().toInt(), TIMER_SPEED_MIN, TIMER_SPEED_MAX);
             // Damit der Wert nach Neustart bleibt:
             markConfigDirty(); 
             req->send(200, "text/plain", "OK");
@@ -183,6 +199,7 @@ void setupWeb() {
 
     // API: Config abrufen
     server.on("/api/getConfig", HTTP_GET, [](AsyncWebServerRequest *req){
+        StateLock lock;
         JsonDocument doc;
         JsonArray arr = doc["fixtures"].to<JsonArray>();
         for (auto &fx : state.fixtures) {
@@ -209,20 +226,47 @@ void setupWeb() {
         req->send(200, "application/json", json);
     });
 
-    // API: Config speichern (PATCH)
+    // API: Config speichern
+    // Der Body kann in mehreren Stücken ankommen → erst sammeln, dann parsen
     server.on("/api/saveConfig", HTTP_POST, [](AsyncWebServerRequest *req){}, NULL,
-    [](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t, size_t){
+    [](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total){
+        if (total == 0 || total > MAX_CONFIG_BODY) {
+            if (index == 0) req->send(413, "text/plain", "Body zu groß");
+            return;
+        }
+        if (index == 0) req->_tempObject = malloc(total);
+        if (!req->_tempObject) {
+            if (index == 0) req->send(500, "text/plain", "Kein Speicher");
+            return;
+        }
+        memcpy((uint8_t*)req->_tempObject + index, data, len);
+        if (index + len < total) return; // Warten auf weitere Stücke
+
         JsonDocument doc;
-        if (deserializeJson(doc, data, len)) {
+        if (deserializeJson(doc, (const char*)req->_tempObject, total)) {
             req->send(400, "text/plain", "JSON Error");
             return;
         }
+
+        StateLock lock;
+
+        // Alte Fixtures merken, damit MH-Grenzen & Auto-Modus erhalten bleiben
+        std::vector<Fixture> oldFixtures = state.fixtures;
+
         state.fixtures.clear();
         for (JsonObject o : doc["fixtures"].as<JsonArray>()) {
             Fixture fx;
             fx.name = o["name"].as<String>();
-            fx.start = o["start"].as<int>();
+            fx.start = constrain(o["start"].as<int>(), 1, 512);
             fx.type = o["type"].as<String>();
+            for (auto &old : oldFixtures) {
+                if (old.name == fx.name) {
+                    fx.panMin = old.panMin;   fx.panMax = old.panMax;
+                    fx.tiltMin = old.tiltMin; fx.tiltMax = old.tiltMax;
+                    fx.isAutoMoving = old.isAutoMoving;
+                    break;
+                }
+            }
             state.fixtures.push_back(fx);
         }
         state.fixtureTypes.clear();
@@ -239,9 +283,12 @@ void setupWeb() {
             def.offsetTilt = t["offsetTilt"] | -1;
             state.fixtureTypes[kv.key().c_str()] = def;
         }
-        saveConfig();
         updateDMXChannelCount();
-        setupDMX();
+        memset(state.dmx, 0, sizeof(state.dmx)); // Alte Werte auf verschobenen Adressen löschen
+
+        // Flash-Schreiben und DMX-Neustart übernimmt der Effekt-Task
+        state.dmxReinit = true;
+        configSaveNow = true;
         req->send(200, "text/plain", "OK");
     });
 

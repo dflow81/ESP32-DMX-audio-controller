@@ -14,24 +14,17 @@ uint8_t enPin = 33;
 SparkFunDMX dmx;
 
 // Hilfsfunktion: Prüft, ob ein Kanal gedimmt werden darf
+// (Maske wird in updateDMXChannelCount() vorberechnet)
 bool isDimmableChannel(int channelIndex) {
-    for (auto &fx : state.fixtures) {
-        const FixtureDefinition* def = getFixtureDef(fx.type);
-        if (!def) continue;
+    if (channelIndex < 0 || channelIndex >= 512) return false;
+    return state.dimmable[channelIndex];
+}
 
-        int base = fx.start - 1;
-        int localIdx = channelIndex - base;
-
-        // Nur Dimmer und Farben sind dimmbar
-        if (localIdx == def->offsetDimmer || 
-            localIdx == def->offsetR || 
-            localIdx == def->offsetG || 
-            localIdx == def->offsetB || 
-            localIdx == def->offsetW) {
-            return true;
-        }
-    }
-    return false;
+// Schreibt einen Kanal nur, wenn Offset gültig ist und im DMX-Puffer liegt
+static inline void setChannel(int base, int offset, uint8_t v) {
+    if (offset < 0) return;
+    int ch = base + offset;
+    if (ch >= 0 && ch < 512) state.dmx[ch] = v;
 }
 
 // Master anwenden
@@ -49,11 +42,8 @@ void setFixtureMovement(int index, uint8_t pan, uint8_t tilt) {
 
     int base = fx.start - 1;
 
-    if (def->offsetPan >= 0)
-        state.dmx[base + def->offsetPan] = pan;
-
-    if (def->offsetTilt >= 0)
-        state.dmx[base + def->offsetTilt] = tilt;
+    setChannel(base, def->offsetPan, pan);
+    setChannel(base, def->offsetTilt, tilt);
 }
 
 void setFixtureColor(int index, uint8_t r, uint8_t g, uint8_t b, uint8_t w) {
@@ -65,15 +55,19 @@ void setFixtureColor(int index, uint8_t r, uint8_t g, uint8_t b, uint8_t w) {
 
     int base = fx.start - 1;
 
-    if (def->offsetDimmer >= 0)
-        state.dmx[base + def->offsetDimmer] = 255;
-    if (def->offsetR >= 0) state.dmx[base + def->offsetR] = r;
-    if (def->offsetG >= 0) state.dmx[base + def->offsetG] = g;
-    if (def->offsetB >= 0) state.dmx[base + def->offsetB] = b;
-    if (def->offsetW >= 0) state.dmx[base + def->offsetW] = w;
+    setChannel(base, def->offsetDimmer, 255);
+    setChannel(base, def->offsetR, r);
+    setChannel(base, def->offsetG, g);
+    setChannel(base, def->offsetB, b);
+    setChannel(base, def->offsetW, w);
 }
 
 void setupDMX() {
+    // 1. Enable-Pin explizit als Ausgang definieren
+    pinMode(enPin, OUTPUT);
+    
+    // 2. Pin manuell auf HIGH setzen, um den RS485-Treiber auf "Senden" zu schalten
+    digitalWrite(enPin, HIGH);
     if (state.numChannels > 512) state.numChannels = 512;
     dmxSerial.begin(DMX_BAUD, DMX_FORMAT, rxPin, txPin);
     dmx.begin(dmxSerial, enPin, state.numChannels);

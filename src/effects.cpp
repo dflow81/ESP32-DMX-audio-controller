@@ -2,15 +2,25 @@
 #include "effects.h"
 #include "state.h"
 #include "dmx.h"
+#include <vector>
 
 extern ControllerState state;
 
-// Buffer für Sparkle
-static uint8_t sparkleBuf[64];
+// Buffer für Sparkle (wächst mit der Anzahl der Fixtures)
+static std::vector<uint8_t> sparkleBuf;
 
 // Hilfsfunktion: Zeitfaktor aus Timer-Speed
 float getT() {
-    return millis() * (1.0f / state.timerSpeed);
+    return millis() * (1.0f / max(1, state.timerSpeed));
+}
+
+// Hilfsfunktion: Ping-Pong-Position (0 … n-1 … 0) aus Timer-Speed
+static int bouncePos() {
+    int n = state.fixtures.size();
+    if (n < 2) return 0;
+    int period = 2 * (n - 1);
+    int step = (millis() / max(1, state.timerSpeed)) % period;
+    return step < n ? step : period - step;
 }
 
 // --------------------------------------------------
@@ -70,18 +80,11 @@ void effectChase() {
 // BOUNCE
 // --------------------------------------------------
 void effectBounce() {
-    static int pos = 0;
-    static int dir = 1;
+    int pos = bouncePos();
 
     for (int i = 0; i < state.fixtures.size(); i++) {
         uint8_t v = (i == pos) ? 255 : 0;
         setFixtureColor(i, v, 0, 0, 255);
-    }
-
-    if (millis() % state.timerSpeed < 20) {
-        pos += dir;
-        if (pos <= 0 || pos >= state.fixtures.size() - 1)
-            dir = -dir;
     }
 }
 
@@ -118,6 +121,8 @@ void effectPulse() {
 // SPARKLE
 // --------------------------------------------------
 void effectSparkle() {
+    if (sparkleBuf.size() < state.fixtures.size()) sparkleBuf.resize(state.fixtures.size(), 0);
+
     for (int i = 0; i < state.fixtures.size(); i++) {
 
         if (random(0, 100) < 3)
@@ -261,14 +266,7 @@ void effectDimmerChase() {
 // DIMMER BOUNCE
 // --------------------------------------------------
 void effectDimmerBounce() {
-    static int pos = 0;
-    static int dir = 1;
-
-    if (millis() % state.timerSpeed < 20) {
-        pos += dir;
-        if (pos <= 0 || pos >= state.fixtures.size() - 1)
-            dir = -dir;
-    }
+    int pos = bouncePos();
 
     for (int i = 0; i < state.fixtures.size(); i++) {
         uint8_t v = (i == pos) ? 255 : 0;
@@ -321,8 +319,10 @@ void effectDisco2() {
     };
 
     // Speichert, welche Farbe gerade für welches Fixture aktiv ist
-    static int fixtureColorIdx[64]; 
+    static std::vector<int> fixtureColorIdx;
     static bool strobeState = false;
+
+    if (fixtureColorIdx.size() < state.fixtures.size()) fixtureColorIdx.resize(state.fixtures.size(), 0);
 
     // --- DROP LOGIK (Stroboskop) ---
     // state.drop wird in der audio.cpp gesetzt, wenn die Energie extrem steigt
@@ -394,6 +394,8 @@ void effectRetro() {
 // RUN EFFECT (Zentrale Steuerung)
 // --------------------------------------------------
 void runEffect(const String& name) {
+    // Ohne Fixtures nichts tun (verhindert Division durch 0 in Chase-Effekten)
+    if (state.fixtures.empty()) return;
 
     if (name == "static") effectStaticColor();
     else if (name == "fade") effectColorFade();
@@ -415,5 +417,6 @@ void runEffect(const String& name) {
     else if (name == "dimmerchase") effectDimmerChase();
     else if (name == "dimmerbounce") effectDimmerBounce();
     else if (name == "disco") effectDisco();
+    else if (name == "disco2") effectDisco2();
     else if (name == "retro") effectRetro();
 }

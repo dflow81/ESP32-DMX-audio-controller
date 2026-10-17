@@ -2,6 +2,8 @@
 #include <Arduino.h>
 #include <vector>
 #include <map>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 struct FixtureDefinition {
     int channels;
@@ -42,7 +44,9 @@ struct ControllerState {
     // DMX & Fixtures
     uint8_t dmx[512];
     uint8_t dmxPreview[512];
+    bool dimmable[512];          // Vorberechnet: Kanal wird vom Master gedimmt
     int numChannels = 0;
+    volatile bool dmxReinit = false; // Web-UI fordert Neustart der DMX-Schnittstelle an
     std::vector<Fixture> fixtures;
     std::map<String, FixtureDefinition> fixtureTypes;
 
@@ -57,7 +61,9 @@ struct ControllerState {
     String wifi_pass = "";
 
     // Audio / Beat Detection
-    bool  beat = false;
+    volatile uint32_t beatCount = 0;   // Wird vom Audio-Task bei jedem Kick erhöht
+    volatile uint32_t lastBeatMs = 0;  // Zeitpunkt des letzten Kicks
+    bool  beat = false;                // Nur im Effekt-Task: neuer Kick seit letztem Frame
     bool  drop = false;
     float bpm = 120.0f; // Standardwert für BPM
     double level = 0.0;     
@@ -80,10 +86,23 @@ struct ControllerState {
     int chaseIndex = 0;
     int timerSpeed = 500;
     bool strobeOnFastBass = false;
-     int audioThreshold = 45; // Standardwert
+    int audioThreshold = 45; // Standardwert
 };
 
 extern ControllerState state;
+
+// Grenzen für die Effekt-Geschwindigkeit (verhindert Division durch 0)
+#define TIMER_SPEED_MIN 20
+#define TIMER_SPEED_MAX 5000
+
+// Schützt state.fixtures, state.fixtureTypes, state.currentEffect und state.dmx
+// vor gleichzeitigem Zugriff von Webserver und Effekt-Task
+extern SemaphoreHandle_t stateMutex;
+
+struct StateLock {
+    StateLock()  { xSemaphoreTake(stateMutex, portMAX_DELAY); }
+    ~StateLock() { xSemaphoreGive(stateMutex); }
+};
 
 // Funktions-Prototypen
 void initState();

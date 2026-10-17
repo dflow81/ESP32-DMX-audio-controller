@@ -27,7 +27,7 @@ Ideal für Lichtsteuerung, Musikvisualisierung, Partys, Clubs oder Installatione
 
 ### 🎵 Audio‑Reaktiv
 - I2S‑Audioeingang (z. B. INMP441)
-- 512‑Punkte FFT (ESP‑DSP)
+- 1024‑Punkte FFT (arduinoFFT)
 - Kick‑, Snare‑ und HiHat‑Erkennung
 - BPM‑Berechnung über Beat‑Historie
 - Spektralfluss‑Analyse
@@ -45,8 +45,9 @@ Ideal für Lichtsteuerung, Musikvisualisierung, Partys, Clubs oder Installatione
 | Funktion | Pin |
 |---------|-----|
 | I2S WS  | 5   |
-| I2S SD  | 26  |
-| I2S SCK | 21  |
+| I2S SD  | 19  |
+| I2S SCK | 18  |
 | DMX TX  | 32  |
+| DMX EN (RS485 DE/RE) | 33 |
 
 
