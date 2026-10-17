@@ -8,6 +8,7 @@
 #include "wifi.h"
 #include "ota.h"
 #include "netinput.h"
+#include "display.h"
 
 // 1. Extern bekannt machen
 extern void taskAudio(void *pv); 
@@ -152,6 +153,7 @@ void setup() {
     Serial.begin(115200);
     delay(500);
     
+    setupDisplay(); // zeigt "startet …", während das WLAN verbindet
     if (!LittleFS.begin(true)) Serial.println("LittleFS Error!");
 
     initState(); // Lädt beim Start alle gespeicherten Werte
@@ -172,10 +174,11 @@ void setup() {
 
 void loop() {
     // Effekte und Audio laufen in eigenen FreeRTOS-Tasks;
-    // die Loop kümmert sich um WLAN, OTA-Updates und geplante Neustarts
+    // die Loop kümmert sich um WLAN, OTA-Updates, Display und geplante Neustarts
     handleWiFi();
     handleOTA();
     handleLiveStatus();
+    handleDisplay();
 
     if (restartAt && (long)(millis() - restartAt) >= 0) {
         StateLock lock; // wartet, bis ein laufender Speichervorgang fertig ist
