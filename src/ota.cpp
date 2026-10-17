@@ -10,41 +10,12 @@
 // Gemeinsame Logik für beide Update-Wege
 // ------------------------------------------------------------
 
-// Ein Dateisystem-Update überschreibt die config.json (Fixtures, WLAN …).
-// Deshalb wird sie vorher im RAM gesichert und danach zurückgeschrieben.
-static String savedConfig;
-static bool updateIsFs = false;
-static volatile unsigned long restartAt = 0;
-
+// Die Einstellungen liegen im NVS, ein Dateisystem-Update lässt sie also unberührt.
 static void beginUpdate(bool fs) {
     StateLock lock;           // wartet, falls der Effekt-Task gerade speichert
     state.otaActive = true;   // ab jetzt kein Auto-Save mehr
-    updateIsFs = fs;
-    savedConfig = "";
-
-    if (fs) {
-        File f = LittleFS.open("/config.json", "r");
-        if (f) {
-            savedConfig = f.readString();
-            f.close();
-        }
-        LittleFS.end();
-    }
+    if (fs) LittleFS.end();   // Dateisystem aushängen, bevor es überschrieben wird
     Serial.printf("OTA: Update gestartet (%s)\n", fs ? "Dateisystem" : "Firmware");
-}
-
-// Nach einem Dateisystem-Update (auch nach einem fehlgeschlagenen) die Config zurückschreiben
-static void restoreConfig() {
-    if (!updateIsFs || savedConfig.isEmpty()) return;
-    if (LittleFS.begin(true)) {
-        File f = LittleFS.open("/config.json", "w");
-        if (f) {
-            f.print(savedConfig);
-            f.close();
-            Serial.println("OTA: config.json wiederhergestellt");
-        }
-        LittleFS.end();
-    }
 }
 
 // ------------------------------------------------------------
@@ -154,9 +125,8 @@ static void setupWebUpdate() {
                                                              ok ? "OK" : webUpdateError.c_str());
             res->addHeader("Connection", "close");
             req->send(res);
-            // Neustart erst nach dem Senden der Antwort (in handleOTA)
-            restartAt = millis() + 1000;
-            if (!restartAt) restartAt = 1;
+            // Neustart erst nach dem Senden der Antwort (in loop())
+            scheduleRestart(1000);
         },
         // Wird für jedes Stück der hochgeladenen Datei aufgerufen
         [](AsyncWebServerRequest *req, const String &filename, size_t index,
@@ -200,14 +170,11 @@ static void setupArduinoOTA() {
         beginUpdate(ArduinoOTA.getCommand() == U_SPIFFS);
     });
     ArduinoOTA.onEnd([]() {
-        restoreConfig();
         Serial.println("OTA: fertig, Neustart");
     });
     ArduinoOTA.onError([](ota_error_t error) {
         Serial.printf("OTA: Fehler %u\n", error);
-        restoreConfig();
-        restartAt = millis() + 1000; // sauber neu starten (Dateisystem war ausgehängt)
-        if (!restartAt) restartAt = 1;
+        scheduleRestart(1000); // sauber neu starten (Dateisystem war evtl. ausgehängt)
     });
     ArduinoOTA.begin(); // startet auch mDNS → http://dmx-controller.local
 }
@@ -220,11 +187,4 @@ void setupOTA() {
 
 void handleOTA() {
     ArduinoOTA.handle();
-
-    if (restartAt && (long)(millis() - restartAt) >= 0) {
-        restoreConfig();
-        Serial.println("OTA: Neustart");
-        delay(100);
-        ESP.restart();
-    }
 }

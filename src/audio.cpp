@@ -46,7 +46,7 @@ unsigned long lastKickTime = 0;
 // ------------------------------------------------------------
 // Drop-Erkennung
 // Typischer Drop: Groove läuft → Breakdown ohne Kick → erster kräftiger Kick.
-// Zweiter Weg: plötzlicher starker Energiesprung (vor dem Auto-Gain gemessen).
+// Zweiter Weg: plötzlicher starker Energiesprung.
 // ------------------------------------------------------------
 #define DROP_BREAK_MIN_MS    1500   // So lange darf kein Kick kommen, damit es als Breakdown zählt
 #define DROP_BREAK_MAX_MS   30000   // Längere Pausen = Musik war aus, kein Drop
@@ -86,8 +86,8 @@ void updateKickBPM() {
     lastKickTime = now;
 }
 
-// rawEnergy und kickEnergy müssen VOR dem Auto-Gain gemessen sein,
-// sonst gleicht der Gain den Lautstärkesprung des Drops sofort aus.
+// rawEnergy und kickEnergy sind Rohenergien ohne Verstärkung, damit der
+// Lautstärkesprung des Drops erhalten bleibt.
 // sinceLastKick = Zeit seit dem vorherigen Kick (vor diesem Frame)
 bool detectDrop(double rawEnergy, bool kick, double kickEnergy, unsigned long sinceLastKick) {
     unsigned long now = millis();
@@ -155,36 +155,42 @@ void taskAudio(void *pv) {
     setupI2S();
     size_t bytesRead = 0;
     int32_t raw[SAMPLE_COUNT];
-    double targetLevel = 3500.0;
     unsigned long dropStartTime = 0;
 
     for (;;) {
         i2s_read(I2S_NUM_0, raw, SAMPLE_COUNT * sizeof(int32_t), &bytesRead, portMAX_DELAY);
 
+        // Samples übernehmen und Mittelwert (DC-Offset des Mikrofons) bestimmen
+        double dc = 0;
         for (int i = 0; i < SAMPLE_COUNT; i++) {
             vReal[i] = (double)(raw[i] >> 14); 
             vImag[i] = 0;
+            dc += vReal[i];
         }
+        dc /= SAMPLE_COUNT;
 
+        // DC-Offset entfernen: durch das Hamming-Fenster würde er sonst in die
+        // FFT-Bins 1-2 "verschmieren" – genau das Kick-Band
         double currentLevel = 0;
-        for (int i = 0; i < 100; i++) currentLevel += abs(vReal[i]);
-        currentLevel /= 100;
-        
-        double gain = state.autoGain ? (targetLevel / (currentLevel + 1.0)) : state.gain;
-        gain = constrain(gain, 0.5, 8.0); 
-        for (int i = 0; i < SAMPLE_COUNT; i++) vReal[i] *= gain;
-
+        for (int i = 0; i < SAMPLE_COUNT; i++) {
+            vReal[i] -= dc;
+            currentLevel += fabs(vReal[i]);
+        }
+        currentLevel /= SAMPLE_COUNT; // Pegel über alle Samples (für die UI-Anzeige)
         state.level = currentLevel;
-        state.gain = gain;
+
+        // Hinweis: Es gibt bewusst keine Gain-Stufe. Alle Schwellen (Noise-Gate,
+        // Retro-Effekt, Drop-Erkennung) arbeiten auf den Rohenergien; die frühere
+        // Auto-Gain-Verstärkung wurde ohnehin wieder herausgerechnet.
 
         FFT.windowing(FFT_WIN_TYP_HAMMING, FFT_FORWARD);
         FFT.compute(FFT_FORWARD);
         FFT.complexToMagnitude();
 
-        // Frequenz-Rohwerte berechnen
-        double kRaw = bandEnergy(1, 2) / (state.gain + 0.1);
-        double sRaw = bandEnergy(7, 15) / (state.gain + 0.1);
-        double hRaw = bandEnergy(180, 450) / (state.gain + 0.1);
+        // Frequenz-Rohwerte berechnen (1 Bin ≈ 43 Hz)
+        double kRaw = bandEnergy(1, 2);      // ~43-86 Hz   Kick
+        double sRaw = bandEnergy(7, 15);     // ~300-650 Hz Snare
+        double hRaw = bandEnergy(180, 450);  // ~7.7-19 kHz Hi-Hat
 
         // --- WICHTIG: Energiewerte in den globalen State schreiben ---
         // Nur so kann die effects.cpp (Retro-Effekt) darauf zugreifen!
@@ -206,10 +212,9 @@ void taskAudio(void *pv) {
             state.bpm = 0; 
         }
 
-        // Gesamtenergie vor dem Auto-Gain (wie kRaw/sRaw/hRaw)
+        // Gesamtenergie (Rohwert, wie kRaw/sRaw/hRaw)
         double totalE = 0;
         for(int i=2; i<250; i++) totalE += vReal[i];
-        totalE /= (state.gain + 0.1);
 
         if (detectDrop(totalE, isKick, kRaw, sinceLastKick)) {
             state.drop = true;

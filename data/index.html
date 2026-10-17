@@ -154,6 +154,10 @@ function loadConfig() {
         if(!isDragging) {
             document.getElementById("master").value = data.master;
             document.getElementById("masterVal").textContent = data.master;
+            if(data.timerSpeed) {
+                document.getElementById("timerFader").value = data.timerSpeed;
+                document.getElementById("timerVal").textContent = data.timerSpeed;
+            }
             if(data.dropEnabled !== undefined) {
                 document.getElementById("dropEnabled").checked = data.dropEnabled;
             }

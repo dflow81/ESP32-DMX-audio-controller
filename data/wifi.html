@@ -70,31 +70,63 @@ function scan() {
     btn.disabled = true;
     listDiv.innerHTML = "<p style='color:#888'>Scan wird durchgeführt...</p>";
 
-    fetch("/api/scanWifi")
-        .then(r => r.json())
-        .then(list => {
-            let html = "";
-            if(!list || list.length === 0) {
-                html = "<p style='color:#ff5252'>Keine Netzwerke gefunden.</p>";
-            } else {
-                list.forEach(n => {
-                    const safeSSID = n.ssid.replace(/'/g, "\\'");
-                    html += `
-                        <div class="ssid-item" onclick="selectSSID('${safeSSID}')">
-                            <span style="font-weight:bold;">${n.ssid}</span>
-                            <span class="rssi">${n.rssi} dBm</span>
-                        </div>`;
-                });
-            }
-            listDiv.innerHTML = html;
-        })
-        .catch(err => {
-            listDiv.innerHTML = "<p style='color:#ff5252'>Fehler beim Scannen.</p>";
-        })
-        .finally(() => {
-            btn.innerText = "Netzwerke scannen";
-            btn.disabled = false;
-        });
+    // Der ESP scannt im Hintergrund: 202 = läuft noch → nach 1 s erneut fragen
+    let tries = 0;
+    const done = () => {
+        btn.innerText = "Netzwerke scannen";
+        btn.disabled = false;
+    };
+    const poll = () => {
+        fetch("/api/scanWifi")
+            .then(r => {
+                if (r.status === 202) {
+                    if (++tries > 20) throw new Error("Timeout");
+                    setTimeout(poll, 1000);
+                    return null;
+                }
+                if (!r.ok) throw new Error(r.status);
+                return r.json();
+            })
+            .then(list => {
+                if (list === null) return; // Scan läuft noch
+                showNetworks(list || []);
+                done();
+            })
+            .catch(err => {
+                listDiv.innerHTML = "<p style='color:#ff5252'>Fehler beim Scannen.</p>";
+                done();
+            });
+    };
+    poll();
+}
+
+/**
+ * Netzwerkliste anzeigen (SSIDs als Text einfügen, nicht als HTML)
+ */
+function showNetworks(list) {
+    const listDiv = document.getElementById("list");
+    listDiv.innerHTML = "";
+    if (list.length === 0) {
+        listDiv.innerHTML = "<p style='color:#ff5252'>Keine Netzwerke gefunden.</p>";
+        return;
+    }
+    list.sort((a, b) => b.rssi - a.rssi);
+    list.forEach(n => {
+        const item = document.createElement("div");
+        item.className = "ssid-item";
+        item.onclick = () => selectSSID(n.ssid);
+
+        const name = document.createElement("span");
+        name.style.fontWeight = "bold";
+        name.textContent = n.ssid;
+
+        const rssi = document.createElement("span");
+        rssi.className = "rssi";
+        rssi.textContent = n.rssi + " dBm";
+
+        item.append(name, rssi);
+        listDiv.appendChild(item);
+    });
 }
 
 /**

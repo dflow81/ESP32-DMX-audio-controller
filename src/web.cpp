@@ -31,6 +31,25 @@ void handleAutoSave() {
     }
 }
 
+// Sammelt einen Request-Body, der in mehreren Stücken ankommen kann.
+// Gibt den kompletten Body zurück, sobald das letzte Stück da ist, sonst nullptr.
+// Bei Fehlern wird direkt geantwortet und ebenfalls nullptr zurückgegeben.
+static const char* collectBody(AsyncWebServerRequest *req, uint8_t *data, size_t len,
+                               size_t index, size_t total) {
+    if (total == 0 || total > MAX_CONFIG_BODY) {
+        if (index == 0) req->send(413, "text/plain", "Body zu groß");
+        return nullptr;
+    }
+    if (index == 0) req->_tempObject = malloc(total);
+    if (!req->_tempObject) {
+        if (index == 0) req->send(500, "text/plain", "Kein Speicher");
+        return nullptr;
+    }
+    memcpy((uint8_t*)req->_tempObject + index, data, len);
+    if (index + len < total) return nullptr; // Warten auf weitere Stücke
+    return (const char*)req->_tempObject;
+}
+
 void hexToRGB(String hex, uint8_t &r, uint8_t &g, uint8_t &b) {
     if (hex.startsWith("#")) hex = hex.substring(1);
     long number = strtol(hex.c_str(), NULL, 16);
@@ -54,7 +73,6 @@ void setupWeb() {
         doc["drop"]   = state.drop;
         doc["bpm"]    = (isnan(state.bpm) || state.bpm < 10) ? 0 : (int)state.bpm;
         doc["master"] = state.master;
-        doc["gain"]   = state.gain;
         doc["audioThreshold"] = state.audioThreshold; // Für den Slider-Sync
 
         String json;
@@ -127,7 +145,10 @@ void setupWeb() {
             uint8_t t = req->getParam("t")->value().toInt();
             StateLock lock;
             if(id >= 0 && id < (int)state.fixtures.size()) {
-                state.fixtures[id].isAutoMoving = false; 
+                if (state.fixtures[id].isAutoMoving) {
+                    state.fixtures[id].isAutoMoving = false; // Joystick übernimmt
+                    markConfigDirty();
+                }
                 setFixtureMovement(id, p, t);
                 req->send(200, "text/plain", "OK");
                 return;
@@ -164,6 +185,41 @@ void setupWeb() {
         req->send(400, "text/plain", "Error");
     });
 
+    // API: Moving Head ausgewählt → aktuellen Zustand zurückgeben
+    server.on("/api/select", HTTP_GET, [](AsyncWebServerRequest *req){
+        int id = req->hasParam("id") ? req->getParam("id")->value().toInt() : -1;
+        StateLock lock;
+        if (id < 0 || id >= (int)state.fixtures.size()) {
+            req->send(400, "text/plain", "Error");
+            return;
+        }
+        auto &fx = state.fixtures[id];
+        JsonDocument doc;
+        doc["id"]   = id;
+        doc["name"] = fx.name;
+        doc["auto"] = fx.isAutoMoving;
+        doc["pMin"] = fx.panMin;  doc["pMax"] = fx.panMax;
+        doc["tMin"] = fx.tiltMin; doc["tMax"] = fx.tiltMax;
+        String json;
+        serializeJson(doc, json);
+        req->send(200, "application/json", json);
+    });
+
+    // API: Auto-Modus gezielt setzen (für den Motor-Test)
+    server.on("/api/setAuto", HTTP_GET, [](AsyncWebServerRequest *req){
+        if (req->hasParam("id") && req->hasParam("on")) {
+            int id = req->getParam("id")->value().toInt();
+            StateLock lock;
+            if (id >= 0 && id < (int)state.fixtures.size()) {
+                state.fixtures[id].isAutoMoving = req->getParam("on")->value().toInt() != 0;
+                markConfigDirty();
+                req->send(200, "text/plain", state.fixtures[id].isAutoMoving ? "ON" : "OFF");
+                return;
+            }
+        }
+        req->send(400, "text/plain", "Error");
+    });
+
     // API: Auto-Modus Toggle
     server.on("/api/toggleAuto", HTTP_GET, [](AsyncWebServerRequest *req){
         if (req->hasParam("id")) {
@@ -171,6 +227,7 @@ void setupWeb() {
             StateLock lock;
             if(id >= 0 && id < (int)state.fixtures.size()) {
                 state.fixtures[id].isAutoMoving = !state.fixtures[id].isAutoMoving;
+                markConfigDirty();
                 req->send(200, "text/plain", state.fixtures[id].isAutoMoving ? "ON" : "OFF");
                 return;
             }
@@ -244,6 +301,10 @@ void setupWeb() {
         doc["effect"] = state.currentEffect;
         doc["audioThreshold"] = state.audioThreshold;
         doc["dropEnabled"] = state.dropEnabled;
+        doc["timerSpeed"] = state.timerSpeed;
+        char hex[8];
+        snprintf(hex, sizeof(hex), "#%02x%02x%02x", state.colorR, state.colorG, state.colorB);
+        doc["color"] = hex;
         String json;
         serializeJson(doc, json);
         req->send(200, "application/json", json);
@@ -253,20 +314,11 @@ void setupWeb() {
     // Der Body kann in mehreren Stücken ankommen → erst sammeln, dann parsen
     server.on("/api/saveConfig", HTTP_POST, [](AsyncWebServerRequest *req){}, NULL,
     [](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total){
-        if (total == 0 || total > MAX_CONFIG_BODY) {
-            if (index == 0) req->send(413, "text/plain", "Body zu groß");
-            return;
-        }
-        if (index == 0) req->_tempObject = malloc(total);
-        if (!req->_tempObject) {
-            if (index == 0) req->send(500, "text/plain", "Kein Speicher");
-            return;
-        }
-        memcpy((uint8_t*)req->_tempObject + index, data, len);
-        if (index + len < total) return; // Warten auf weitere Stücke
+        const char *body = collectBody(req, data, len, index, total);
+        if (!body) return;
 
         JsonDocument doc;
-        if (deserializeJson(doc, (const char*)req->_tempObject, total)) {
+        if (deserializeJson(doc, body, total)) {
             req->send(400, "text/plain", "JSON Error");
             return;
         }
@@ -313,6 +365,86 @@ void setupWeb() {
         state.dmxReinit = true;
         configSaveNow = true;
         req->send(200, "text/plain", "OK");
+    });
+
+    // API: WLAN-Netzwerke scannen
+    // Der Scan läuft im Hintergrund: 202 = läuft noch (UI fragt erneut), 200 = Liste
+    server.on("/api/scanWifi", HTTP_GET, [](AsyncWebServerRequest *req){
+        int n = WiFi.scanComplete();
+        if (n == WIFI_SCAN_FAILED) {
+            // Im reinen AP-Modus kann nicht gescannt werden → AP+STA
+            if (WiFi.getMode() == WIFI_AP) WiFi.mode(WIFI_AP_STA);
+            WiFi.scanNetworks(true);
+            req->send(202, "text/plain", "Scan gestartet");
+            return;
+        }
+        if (n == WIFI_SCAN_RUNNING) {
+            req->send(202, "text/plain", "Scan läuft");
+            return;
+        }
+
+        // Doppelte SSIDs (mehrere Access Points) zusammenfassen, stärkstes Signal behalten
+        JsonDocument doc;
+        JsonArray arr = doc.to<JsonArray>();
+        for (int i = 0; i < n; i++) {
+            String ssid = WiFi.SSID(i);
+            if (ssid.isEmpty()) continue;
+            bool dup = false;
+            for (JsonObject o : arr) {
+                if (o["ssid"] == ssid) {
+                    if (WiFi.RSSI(i) > o["rssi"].as<int>()) o["rssi"] = WiFi.RSSI(i);
+                    dup = true;
+                    break;
+                }
+            }
+            if (dup) continue;
+            JsonObject o = arr.add<JsonObject>();
+            o["ssid"] = ssid;
+            o["rssi"] = WiFi.RSSI(i);
+        }
+        WiFi.scanDelete();
+
+        String json;
+        serializeJson(doc, json);
+        req->send(200, "application/json", json);
+    });
+
+    // API: WLAN-Daten speichern → Neustart
+    server.on("/api/saveWifi", HTTP_POST, [](AsyncWebServerRequest *req){}, NULL,
+    [](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total){
+        const char *body = collectBody(req, data, len, index, total);
+        if (!body) return;
+
+        JsonDocument doc;
+        if (deserializeJson(doc, body, total) || !doc["ssid"].is<const char*>()) {
+            req->send(400, "text/plain", "JSON Error");
+            return;
+        }
+        String ssid = doc["ssid"].as<String>();
+        if (ssid.isEmpty() || ssid.length() > 32) {
+            req->send(400, "text/plain", "Ungültige SSID");
+            return;
+        }
+        {
+            StateLock lock;
+            state.wifi_ssid = ssid;
+            state.wifi_pass = doc["pass"] | "";
+            saveConfig();
+        }
+        req->send(200, "text/plain", "OK");
+        scheduleRestart(1500);
+    });
+
+    // API: WLAN-Daten löschen → Neustart im Access-Point-Modus
+    server.on("/api/clearWifi", HTTP_POST, [](AsyncWebServerRequest *req){
+        {
+            StateLock lock;
+            state.wifi_ssid = "";
+            state.wifi_pass = "";
+            saveConfig();
+        }
+        req->send(200, "text/plain", "OK");
+        scheduleRestart(1500);
     });
 
     // Navigation & Default Pages

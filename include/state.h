@@ -68,8 +68,6 @@ struct ControllerState {
     bool  drop = false;
     float bpm = 120.0f; // Standardwert für BPM
     double level = 0.0;     
-    double gain = 1.0;      
-    bool autoGain = true;
     bool dropEnabled = true; // Drop-Erkennung (z. B. für Schlager abschaltbar)
 
     // Frequenz-Energiewerte
@@ -116,6 +114,9 @@ void saveDefaultConfig();
 void loadConfig();
 void markConfigDirty();
 void handleAutoSave();
+
+// Startet den ESP nach delayMs neu (ausgeführt in loop(), damit HTTP-Antworten noch rausgehen)
+void scheduleRestart(unsigned long delayMs);
 
 // WICHTIG: Rückgabe der Definition passend zum String-Typ der Fixture
 const FixtureDefinition* getFixtureDef(const String &typeName);

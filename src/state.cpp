@@ -1,6 +1,13 @@
 #include "state.h"
 #include <LittleFS.h>
 #include <ArduinoJson.h>
+#include <Preferences.h>
+
+// Die Config liegt als JSON im NVS-Speicher (nicht im Dateisystem).
+// So kann ein Dateisystem-Upload (Web-Oberfläche) die Einstellungen nie überschreiben.
+#define NVS_NAMESPACE   "dmx"
+#define NVS_CONFIG_KEY  "config"
+#define LEGACY_CONFIG   "/config.json"   // alter Speicherort, wird einmalig übernommen
 
 ControllerState state;
 SemaphoreHandle_t stateMutex = nullptr;
@@ -72,7 +79,7 @@ void updateDMXChannelCount() {
 }
 
 // ----------------------------------------------------
-// Config speichern (V7 Syntax)
+// Config speichern (JSON im NVS)
 // ----------------------------------------------------
 void saveConfig() {
     JsonDocument doc;
@@ -120,12 +127,19 @@ void saveConfig() {
     doc["colorG"]     = state.colorG;
     doc["colorB"]     = state.colorB;
 
-    File f = LittleFS.open("/config.json", "w");
-    if (f) {
-        serializeJson(doc, f);
-        f.close();
-        Serial.println("Config gespeichert");
+    String json;
+    serializeJson(doc, json);
+
+    Preferences prefs;
+    if (!prefs.begin(NVS_NAMESPACE, false)) {
+        Serial.println("Fehler: NVS konnte nicht geöffnet werden");
+        return;
     }
+    size_t written = prefs.putBytes(NVS_CONFIG_KEY, json.c_str(), json.length());
+    prefs.end();
+
+    if (written == json.length()) Serial.printf("Config gespeichert (%u Bytes)\n", (unsigned)written);
+    else Serial.println("Fehler: Config konnte nicht gespeichert werden");
 }
 
 // ----------------------------------------------------
@@ -159,30 +173,60 @@ void saveDefaultConfig() {
     state.audioThreshold = 45; // Default Threshold
 
     saveConfig();
-    Serial.println("Default config.json erstellt");
+    Serial.println("Default-Config erstellt");
 }
 
 // ----------------------------------------------------
-// Config laden (V7 Syntax)
+// Config aus dem NVS lesen
+// ----------------------------------------------------
+static bool readConfigFromNVS(JsonDocument &doc) {
+    Preferences prefs;
+    if (!prefs.begin(NVS_NAMESPACE, true)) return false; // Namespace existiert noch nicht
+
+    size_t len = prefs.getBytesLength(NVS_CONFIG_KEY);
+    bool ok = false;
+    if (len > 0) {
+        std::vector<char> buf(len);
+        prefs.getBytes(NVS_CONFIG_KEY, buf.data(), len);
+        ok = !deserializeJson(doc, buf.data(), len);
+        if (!ok) Serial.println("Fehler: Config im NVS ist beschädigt");
+    }
+    prefs.end();
+    return ok;
+}
+
+// Einmalige Übernahme der alten /config.json aus LittleFS
+static bool readLegacyConfig(JsonDocument &doc) {
+    if (!LittleFS.exists(LEGACY_CONFIG)) return false;
+    File f = LittleFS.open(LEGACY_CONFIG, "r");
+    if (!f) return false;
+    DeserializationError err = deserializeJson(doc, f);
+    f.close();
+
+    // Uralte Formate (z. B. "fixtures": 4) nicht übernehmen
+    if (err || !doc["fixtures"].is<JsonArray>()) {
+        Serial.println("Alte config.json ist ungültig → wird ignoriert");
+        doc.clear();
+        return false;
+    }
+    return true;
+}
+
+// ----------------------------------------------------
+// Config laden
 // ----------------------------------------------------
 void loadConfig() {
     loadDefaultFixtureTypes();
 
-    if (!LittleFS.exists("/config.json")) {
-        saveDefaultConfig();
-        return;
-    }
-
-    File f = LittleFS.open("/config.json", "r");
-    if (!f) return;
-
     JsonDocument doc;
-    DeserializationError err = deserializeJson(doc, f);
-    f.close();
-
-    if (err) {
-        Serial.println("Fehler beim Lesen der config.json");
-        return;
+    bool migrated = false;
+    if (!readConfigFromNVS(doc)) {
+        migrated = readLegacyConfig(doc);
+        if (!migrated) {
+            saveDefaultConfig();
+            if (LittleFS.exists(LEGACY_CONFIG)) LittleFS.remove(LEGACY_CONFIG);
+            return;
+        }
     }
 
     // Fixtures laden
@@ -230,7 +274,15 @@ void loadConfig() {
     state.colorB         = doc["colorB"]         | 0;
 
     updateDMXChannelCount();
-    Serial.println("Config geladen");
+
+    if (migrated) {
+        // Ab jetzt nur noch NVS; die alte Datei wird nicht mehr gebraucht
+        saveConfig();
+        LittleFS.remove(LEGACY_CONFIG);
+        Serial.println("Config aus config.json ins NVS übernommen");
+    } else {
+        Serial.println("Config geladen");
+    }
 }
 
 // ----------------------------------------------------

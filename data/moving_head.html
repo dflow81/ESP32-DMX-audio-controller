@@ -54,7 +54,7 @@
 <script src="/nipplejs.min.js"></script>
 
 <script>
-    let currentId = -1;
+    let currentId = "-1";
     let lastTs = 0;
     let isTesting = false;
 
@@ -77,13 +77,24 @@
 
     function selectMH() {
         currentId = document.getElementById('mhSelect').value;
-        if(currentId !== "-1") fetch(`/api/select?id=${currentId}`);
+        if(currentId === "-1") return;
+        fetch(`/api/select?id=${currentId}`)
+            .then(res => res.json())
+            .then(fx => setStatus(`${fx.name}: BPM Auto ${fx.auto ? "AN" : "AUS"}`))
+            .catch(e => setStatus("Fehler beim Auswählen!", true));
     }
 
     function sendCmd(path) {
         if(currentId === "-1") return alert("Bitte erst ein Gerät wählen!");
-        fetch(`/api/${path}&id=${currentId}`)
-            .then(() => setStatus("Befehl gesendet: " + path.split('?')[0]));
+        const sep = path.includes('?') ? '&' : '?';
+        fetch(`/api/${path}${sep}id=${currentId}`)
+            .then(res => res.text())
+            .then(txt => {
+                const name = path.split('?')[0];
+                if (name === "toggleAuto") setStatus("BPM Auto " + (txt === "ON" ? "AN" : "AUS"));
+                else setStatus("Befehl gesendet: " + name);
+            })
+            .catch(e => setStatus("Fehler beim Senden!", true));
     }
 
     // 2. Motor-Test Logik
@@ -95,6 +106,7 @@
             btn.style.background = "#dc3545";
             btn.innerText = "TEST LÄUFT... (STOPP)";
             fetch('/api/setBPM?value=120'); // Sicherstellen, dass BPM > 30 ist
+            if (currentId !== "-1") fetch(`/api/setAuto?id=${currentId}&on=1`); // gewählter Head bewegt sich mit
             fetch('/api/setEffect?name=disco');
             setStatus("Test-Modus: Disco-Bewegung aktiv");
         } else {
@@ -126,8 +138,12 @@
         if (currentId === "-1") return;
         let now = Date.now();
         if (now - lastTs > 50) { // 20 FPS Limiter
-            let p = Math.round(127 + data.instance.frontPosition.x);
-            let t = Math.round(127 + data.instance.frontPosition.y);
+            // frontPosition geht von -70 bis +70 (halbe Joystick-Größe) → auf 0…255 skalieren
+            const r = 70;
+            let p = Math.round(127.5 + data.instance.frontPosition.x / r * 127.5);
+            let t = Math.round(127.5 + data.instance.frontPosition.y / r * 127.5);
+            p = Math.max(0, Math.min(255, p));
+            t = Math.max(0, Math.min(255, t));
             
             // Schnelles Senden via XHR
             let x = new XMLHttpRequest();

@@ -11,6 +11,14 @@
 // 1. Extern bekannt machen
 extern void taskAudio(void *pv); 
 
+// Geplanter Neustart (z. B. nach dem Speichern der WLAN-Daten)
+static volatile unsigned long restartAt = 0;
+
+void scheduleRestart(unsigned long delayMs) {
+    unsigned long t = millis() + delayMs;
+    restartAt = t ? t : 1;
+}
+
 // 2. Effekt Task (Core 1)
 void effectTask(void *param) {
     uint32_t lastBeatCount = state.beatCount;
@@ -89,7 +97,15 @@ void setup() {
 
 void loop() {
     // Effekte und Audio laufen in eigenen FreeRTOS-Tasks;
-    // die Loop kümmert sich nur noch um OTA-Updates
+    // die Loop kümmert sich um WLAN, OTA-Updates und geplante Neustarts
+    handleWiFi();
     handleOTA();
+
+    if (restartAt && (long)(millis() - restartAt) >= 0) {
+        StateLock lock; // wartet, bis ein laufender Speichervorgang fertig ist
+        Serial.println("Neustart …");
+        delay(100);
+        ESP.restart();
+    }
     vTaskDelay(pdMS_TO_TICKS(10)); 
 }

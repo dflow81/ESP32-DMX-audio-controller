@@ -102,6 +102,10 @@ void updateMovements() {
     for (int i = 0; i < (int)state.fixtures.size(); i++) {
         auto &fx = state.fixtures[i];
         
+        // Nur Heads bewegen, für die "BPM Auto" eingeschaltet ist;
+        // die anderen bleiben dort, wo der Joystick sie hingestellt hat
+        if (!fx.isAutoMoving) continue;
+
         const FixtureDefinition* def = getFixtureDef(fx.type);
         if (def && def->offsetPan >= 0) {
             
