@@ -1,6 +1,7 @@
 #include <SparkFunDMX.h>
 #include "dmx.h"
 #include "state.h"
+#include <vector>
 
 extern ControllerState state;
 
@@ -80,6 +81,11 @@ void setupDMX() {
 static float beatDirection = 1.0f;
 static float beatOffset = 0.0f;
 
+// Skaliert 0…1 auf den Bereich zwischen Punkt A und B (funktioniert auch, wenn A > B)
+static uint8_t scaleToRange(float w, uint8_t a, uint8_t b) {
+    return constrain(a + (int)lroundf(w * ((int)b - (int)a)), 0, 255);
+}
+
 void updateMovements() {
     // 1. Prüfung: Nur bei Disco-Effekten bewegen
     bool isDiscoEffect = (state.currentEffect == "disco" || state.currentEffect == "disco2");
@@ -88,7 +94,7 @@ void updateMovements() {
     // 2. Prüfung: Haben wir einen Takt?
     if (state.bpm < 30) return; 
 
-    // --- BEAT TRIGGER LOGIK ---
+    // --- BEAT TRIGGER LOGIK (nur Kreis, wie bisher) ---
     // Wenn ein Beat erkannt wurde, ändern wir die Parameter
     if (state.beat) {
         beatDirection *= -1.0f;          // Richtung umkehren (1.0 oder -1.0)
@@ -96,10 +102,30 @@ void updateMovements() {
     }
 
     float bps = state.bpm / 60.0f;
-    // Wir multiplizieren die Zeit mit der beatDirection
-    float globalPhase = (millis() / 1000.0f) * bps * TWO_PI * beatDirection;
+    float seconds = millis() / 1000.0f;
+    // Kreis: ein Umlauf pro Beat, Richtung springt auf jedem Beat
+    float circlePhase = seconds * bps * TWO_PI * beatDirection;
+    // Andere Muster: ein gleichmäßiger Durchlauf pro Takt (4 Beats)
+    float barPhase = seconds * bps * TWO_PI / 4.0f;
 
-    for (int i = 0; i < (int)state.fixtures.size(); i++) {
+    // Zufall: Zielpositionen pro Head, wechseln auf jedem Beat, weich angefahren
+    static std::vector<float> randTargetP, randTargetT, randP, randT;
+    int n = state.fixtures.size();
+    if ((int)randP.size() < n) {
+        randTargetP.resize(n, 0.5f); randTargetT.resize(n, 0.5f);
+        randP.resize(n, 0.5f);       randT.resize(n, 0.5f);
+    }
+    if (state.movePattern == MOVE_RANDOM && state.beat) {
+        float sharedP = random(0, 1001) / 1000.0f, sharedT = random(0, 1001) / 1000.0f;
+        for (int i = 0; i < n; i++) {
+            randTargetP[i] = state.moveSpread ? random(0, 1001) / 1000.0f : sharedP;
+            randTargetT[i] = state.moveSpread ? random(0, 1001) / 1000.0f : sharedT;
+        }
+    }
+
+    float spread = state.moveSpread ? 0.8f : 0.0f; // Versatz zwischen den Heads (Welle)
+
+    for (int i = 0; i < n; i++) {
         auto &fx = state.fixtures[i];
         
         // Nur Heads bewegen, für die "BPM Auto" eingeschaltet ist;
@@ -107,40 +133,89 @@ void updateMovements() {
         if (!fx.isAutoMoving) continue;
 
         const FixtureDefinition* def = getFixtureDef(fx.type);
-        if (def && def->offsetPan >= 0) {
-            
-            // Lokale Phase mit individuellem Offset + globalem Beat-Offset
-            float localPhase = globalPhase + (i * 0.8f) + beatOffset;
+        if (!def || def->offsetPan < 0) continue;
 
-            // Pan/Tilt Berechnung
-            float wavePan = (sin(localPhase) + 1.0f) / 2.0f; 
-            float waveTilt = (cos(localPhase) + 1.0f) / 2.0f;
+        float wavePan = 0.5f, waveTilt = 0.5f;
+        float lp = barPhase + i * spread;
 
-            // Skalierung auf Eckpunkte A und B
-            uint8_t p = fx.panMin + (uint8_t)(wavePan * (fx.panMax - fx.panMin));
-            uint8_t t = fx.tiltMin + (uint8_t)(waveTilt * (fx.tiltMax - fx.tiltMin));
-
-            setFixtureMovement(i, p, t);
+        switch (state.movePattern) {
+            case MOVE_EIGHT:   // liegende Acht
+                wavePan  = (sin(lp) + 1.0f) / 2.0f;
+                waveTilt = (sin(2.0f * lp) + 1.0f) / 2.0f;
+                break;
+            case MOVE_PAN:     // Schwenk links/rechts
+                wavePan  = (sin(lp) + 1.0f) / 2.0f;
+                break;
+            case MOVE_TILT:    // Nicken hoch/runter
+                waveTilt = (sin(lp) + 1.0f) / 2.0f;
+                break;
+            case MOVE_RANDOM:
+                randP[i] += (randTargetP[i] - randP[i]) * 0.15f;
+                randT[i] += (randTargetT[i] - randT[i]) * 0.15f;
+                wavePan  = randP[i];
+                waveTilt = randT[i];
+                break;
+            default: {         // MOVE_CIRCLE
+                float cp = circlePhase + i * spread + beatOffset;
+                wavePan  = (sin(cp) + 1.0f) / 2.0f;
+                waveTilt = (cos(cp) + 1.0f) / 2.0f;
+                break;
+            }
         }
+
+        // Skalierung auf Eckpunkte A und B
+        setFixtureMovement(i, scaleToRange(wavePan, fx.panMin, fx.panMax),
+                              scaleToRange(waveTilt, fx.tiltMin, fx.tiltMax));
     }
 }
 
+// --- Weiche Übergänge ---
+static uint8_t lastOut[512];   // Zuletzt gesendetes Bild (vor Blackout)
+static uint8_t fadeFrom[512];  // Bild zu Beginn des Übergangs
+static unsigned long fadeStart = 0;
+static bool fading = false;
 
+bool isFading() { return fading || state.fadeRequest; }
 
+void cancelFade() {
+    fading = false;
+    state.fadeRequest = false;
+}
 
 void updateDMX() {
     updateMovements(); // Vor dem Senden Bewegungen berechnen
+
+    unsigned long now = millis();
+    if (state.fadeRequest) {
+        state.fadeRequest = false;
+        memcpy(fadeFrom, lastOut, sizeof(fadeFrom));
+        fadeStart = now;
+        fading = true;
+    }
+    float t = 1.0f;
+    if (fading) {
+        t = (now - fadeStart) / (float)FADE_MS;
+        if (t >= 1.0f) { t = 1.0f; fading = false; }
+    }
+
+    // Blackout: Helligkeit sofort auf 0 (der Strobe-Knopf hat Vorrang)
+    bool strobing = (long)(state.manualStrobeUntil - now) > 0;
+    bool dark = state.blackout && !strobing;
 
     for (int i = 0; i < state.numChannels; i++) {
         uint8_t v = state.dmx[i];
         if (v == 0) v = state.dmxPreview[i];
 
         // WICHTIG: Master nur auf Helligkeit anwenden, NICHT auf Pan/Tilt
-        if (isDimmableChannel(i)) {
+        bool dimmable = isDimmableChannel(i);
+        if (dimmable) {
             v = applyMaster(v);
         }
 
-        dmx.writeByte(v, i + 1);
+        if (fading) v = fadeFrom[i] + (int)(((int)v - (int)fadeFrom[i]) * t);
+        lastOut[i] = v;
+
+        dmx.writeByte((dark && dimmable) ? 0 : v, i + 1);
     }
     dmx.update();
 }

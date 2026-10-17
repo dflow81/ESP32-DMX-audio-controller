@@ -22,6 +22,12 @@ void setFixtureColor(int index, uint8_t r, uint8_t g, uint8_t b, uint8_t w);
 // NEU: Setzt Pan und Tilt für ein Fixture (0-255)
 void setFixtureMovement(int index, uint8_t pan, uint8_t tilt);
 
+// Weiche Übergänge: Ein Wechsel (Effekt, Farbe, Preset) wird über FADE_MS eingeblendet.
+// Auslösen per state.fadeRequest = true (auch aus anderen Tasks).
+#define FADE_MS 600
+bool isFading();
+void cancelFade();
+
 // Konstanten für die DMX-Schnittstelle
 #define DMX_BAUD 250000
 #define DMX_FORMAT SERIAL_8N2

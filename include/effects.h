@@ -35,6 +35,9 @@ void effectRetro();
 // Manueller Strobe (Knopf in der Web-UI), überschreibt den laufenden Effekt
 void effectManualStrobe();
 
+// Drop-Reaktion (DropAction aus state.h), elapsed = ms seit dem Drop
+void effectDropReaction(uint8_t action, unsigned long elapsed);
+
 // Hilfsfunktion für Timer-Speed
 float getT();
 

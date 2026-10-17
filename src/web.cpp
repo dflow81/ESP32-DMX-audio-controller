@@ -8,6 +8,7 @@
 
 // Definition des Webservers
 AsyncWebServer server(80);  
+AsyncWebSocket ws("/ws");   // Live-Status (Pegel, Beat, Drop, BPM) an die Browser
 
 volatile unsigned long lastChangeTime = 0;
 volatile bool configDirty = false;
@@ -58,6 +59,60 @@ void hexToRGB(String hex, uint8_t &r, uint8_t &g, uint8_t &b) {
     b = number & 0xFF;
 }
 
+String buildStatusJson(bool beat) {
+    JsonDocument doc;
+    doc["level"]  = constrain(state.level / 5000.0f, 0.0f, 1.0f);
+    doc["beat"]   = beat;
+    doc["drop"]   = state.drop;
+    doc["bpm"]    = (isnan(state.bpm) || state.bpm < 10) ? 0 : (int)state.bpm;
+    doc["master"] = state.master;
+    doc["blackout"] = state.blackout;
+    doc["bpmLocked"] = state.bpmLocked;
+    doc["audioThreshold"] = state.audioThreshold; // Für den Slider-Sync
+
+    String json;
+    serializeJson(doc, json);
+    return json;
+}
+
+void handleLiveStatus() {
+    static unsigned long lastPush = 0, lastCleanup = 0;
+    static uint32_t lastBeatCount = 0;
+    static bool lastDrop = false, lastBlackout = false;
+
+    unsigned long now = millis();
+    if (now - lastCleanup > 1000) {
+        ws.cleanupClients(); // getrennte Browser aufräumen
+        lastCleanup = now;
+    }
+    if (ws.count() == 0) return;
+
+    uint32_t beats = state.beatCount;
+    bool beat = beats != lastBeatCount;
+    bool changed = beat || state.drop != lastDrop || state.blackout != lastBlackout;
+    if (!changed && now - lastPush < 100) return;
+    if (!ws.availableForWriteAll()) return; // ein Browser hängt → diesen Durchlauf auslassen
+
+    ws.textAll(buildStatusJson(beat));
+    lastPush = now;
+    lastBeatCount = beats;
+    lastDrop = state.drop;
+    lastBlackout = state.blackout;
+}
+
+// Fügt ein Preset als JSON-Objekt an (für /api/presets)
+static void presetToJson(JsonArray arr, int id, const Preset &p) {
+    JsonObject o = arr.add<JsonObject>();
+    o["id"]     = id;
+    o["name"]   = p.name;
+    o["effect"] = p.effect;
+    char hex[8];
+    snprintf(hex, sizeof(hex), "#%02x%02x%02x", p.r, p.g, p.b);
+    o["color"]  = hex;
+    o["speed"]  = p.timerSpeed;
+    o["master"] = p.master;
+}
+
 void setupWeb() {
     // --- Statische Dateien (Lokal vom ESP32) ---
     server.serveStatic("/moving_head.html", LittleFS, "/moving_head.html");
@@ -66,18 +121,163 @@ void setupWeb() {
     server.serveStatic("/logo.svg", LittleFS, "/logo.svg");
 
     // API: Live Status (inkl. Audio-Daten für UI)
+    // (Fallback, falls der WebSocket nicht verbunden ist)
     server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *req){
-        JsonDocument doc;
-        doc["level"]  = constrain(state.level / 5000.0f, 0.0f, 1.0f);
-        doc["beat"]   = (millis() - state.lastBeatMs) < 150; // kurz "halten", damit die UI ihn sieht
-        doc["drop"]   = state.drop;
-        doc["bpm"]    = (isnan(state.bpm) || state.bpm < 10) ? 0 : (int)state.bpm;
-        doc["master"] = state.master;
-        doc["audioThreshold"] = state.audioThreshold; // Für den Slider-Sync
+        bool beat = (millis() - state.lastBeatMs) < 150; // kurz "halten", damit die UI ihn sieht
+        req->send(200, "application/json", buildStatusJson(beat));
+    });
 
+    // WebSocket für den Live-Status
+    server.addHandler(&ws);
+
+    // API: Blackout an/aus (wirkt sofort, wird nicht gespeichert)
+    server.on("/api/blackout", HTTP_GET, [](AsyncWebServerRequest *req){
+        if (req->hasParam("on")) {
+            state.blackout = req->getParam("on")->value().toInt() != 0;
+            req->send(200, "text/plain", state.blackout ? "ON" : "OFF");
+        } else { req->send(400, "text/plain", "Error"); }
+    });
+
+    // API: Tap-Tempo. Mehrmals im Takt tippen → BPM wird übernommen und festgehalten
+    server.on("/api/tap", HTTP_GET, [](AsyncWebServerRequest *req){
+        static unsigned long taps[8];
+        static int tapCount = 0;
+        unsigned long now = millis();
+
+        // Längere Pause = neue Tap-Folge
+        if (tapCount > 0 && now - taps[tapCount - 1] > 2000) tapCount = 0;
+        if (tapCount == 8) { memmove(taps, taps + 1, 7 * sizeof(taps[0])); tapCount = 7; }
+        taps[tapCount++] = now;
+
+        if (tapCount >= 2) {
+            float avg = (taps[tapCount - 1] - taps[0]) / (float)(tapCount - 1);
+            state.bpm = constrain(60000.0f / avg, 40.0f, 220.0f);
+            state.bpmLocked = true;
+        }
+        if (state.bpmLocked) state.clockSyncMs = now; // Takt auf den letzten Tap ausrichten
+        req->send(200, "text/plain", String((int)roundf(state.bpm)));
+    });
+
+    // API: BPM festhalten an/aus (aus = wieder Erkennung aus der Musik)
+    server.on("/api/bpmLock", HTTP_GET, [](AsyncWebServerRequest *req){
+        if (req->hasParam("on")) {
+            state.bpmLocked = req->getParam("on")->value().toInt() != 0;
+            if (state.bpmLocked) {
+                if (state.bpm < 40) state.bpm = 120;
+                state.clockSyncMs = millis();
+            }
+            req->send(200, "text/plain", state.bpmLocked ? "ON" : "OFF");
+        } else { req->send(400, "text/plain", "Error"); }
+    });
+
+    // API: Einstellungen (beliebige Kombination der Parameter)
+    // beatSync=0|1, stepsPerBeat=0.5|1|2, autoShow=0|1, showBeats=N,
+    // dropAction=0..3, dropPreset=Name, movePattern=0..4, moveSpread=0|1
+    server.on("/api/settings", HTTP_GET, [](AsyncWebServerRequest *req){
+        StateLock lock;
+        auto param = [req](const char *name) -> String {
+            return req->hasParam(name) ? req->getParam(name)->value() : String();
+        };
+        String v;
+        if ((v = param("beatSync")).length())     state.beatSync = v.toInt() != 0;
+        if ((v = param("stepsPerBeat")).length()) {
+            float f = v.toFloat();
+            state.stepsPerBeat = (f == 2.0f || f == 0.5f) ? f : 1.0f;
+        }
+        if ((v = param("autoShow")).length())     state.autoShow = v.toInt() != 0;
+        if ((v = param("showBeats")).length())    state.showBeats = constrain(v.toInt(), 4, 256);
+        if ((v = param("dropAction")).length())   state.dropAction = constrain(v.toInt(), 0, DROP_ACTION_COUNT - 1);
+        if (req->hasParam("dropPreset"))          state.dropPreset = param("dropPreset");
+        if ((v = param("movePattern")).length())  state.movePattern = constrain(v.toInt(), 0, MOVE_PATTERN_COUNT - 1);
+        if ((v = param("moveSpread")).length())   state.moveSpread = v.toInt() != 0;
+        markConfigDirty();
+        req->send(200, "text/plain", "OK");
+    });
+
+    // API: Zusatzkanal (Gobo, Farbrad, Prisma, Fokus) eines Fixtures setzen
+    server.on("/api/setExtra", HTTP_GET, [](AsyncWebServerRequest *req){
+        if (!req->hasParam("id") || !req->hasParam("ch") || !req->hasParam("v")) {
+            req->send(400, "text/plain", "Error");
+            return;
+        }
+        int id = req->getParam("id")->value().toInt();
+        String ch = req->getParam("ch")->value();
+        int v = constrain(req->getParam("v")->value().toInt(), 0, 255);
+
+        int e = -1;
+        for (int i = 0; i < EXTRA_COUNT; i++) if (ch == EXTRA_NAMES[i]) e = i;
+
+        StateLock lock;
+        if (e < 0 || id < 0 || id >= (int)state.fixtures.size()) {
+            req->send(400, "text/plain", "Error");
+            return;
+        }
+        state.fixtures[id].extra[e] = v;
+        applyFixtureExtras();
+        markConfigDirty();
+        req->send(200, "text/plain", "OK");
+    });
+
+    // --- Presets ---
+    server.on("/api/presets", HTTP_GET, [](AsyncWebServerRequest *req){
+        StateLock lock;
+        JsonDocument doc;
+        JsonArray arr = doc.to<JsonArray>();
+        for (size_t i = 0; i < state.presets.size(); i++) presetToJson(arr, i, state.presets[i]);
         String json;
         serializeJson(doc, json);
         req->send(200, "application/json", json);
+    });
+
+    // Aktuelle Einstellungen als Preset speichern (gleicher Name = überschreiben)
+    server.on("/api/savePreset", HTTP_GET, [](AsyncWebServerRequest *req){
+        String name = req->hasParam("name") ? req->getParam("name")->value() : "";
+        name.trim();
+        if (name.isEmpty() || name.length() > PRESET_NAME_MAX) {
+            req->send(400, "text/plain", "Name fehlt oder ist zu lang");
+            return;
+        }
+        StateLock lock;
+        Preset *target = nullptr;
+        for (auto &p : state.presets) if (p.name == name) target = &p;
+        if (!target) {
+            if (state.presets.size() >= MAX_PRESETS) {
+                req->send(409, "text/plain", "Maximal " + String(MAX_PRESETS) + " Presets");
+                return;
+            }
+            state.presets.push_back(Preset());
+            target = &state.presets.back();
+            target->name = name;
+        }
+        target->effect     = state.currentEffect;
+        target->r = state.colorR; target->g = state.colorG; target->b = state.colorB;
+        target->timerSpeed = state.timerSpeed;
+        target->master     = state.master;
+        markConfigDirty();
+        req->send(200, "text/plain", "OK");
+    });
+
+    server.on("/api/loadPreset", HTTP_GET, [](AsyncWebServerRequest *req){
+        int id = req->hasParam("id") ? req->getParam("id")->value().toInt() : -1;
+        StateLock lock;
+        if (id < 0 || id >= (int)state.presets.size()) {
+            req->send(400, "text/plain", "Error");
+            return;
+        }
+        applyPreset(id, true);
+        req->send(200, "text/plain", "OK");
+    });
+
+    server.on("/api/deletePreset", HTTP_GET, [](AsyncWebServerRequest *req){
+        int id = req->hasParam("id") ? req->getParam("id")->value().toInt() : -1;
+        StateLock lock;
+        if (id < 0 || id >= (int)state.presets.size()) {
+            req->send(400, "text/plain", "Error");
+            return;
+        }
+        state.presets.erase(state.presets.begin() + id);
+        markConfigDirty();
+        req->send(200, "text/plain", "OK");
     });
 
     // --- NEU: API für Audio Threshold (Noise Gate) ---
@@ -200,6 +400,13 @@ void setupWeb() {
         doc["auto"] = fx.isAutoMoving;
         doc["pMin"] = fx.panMin;  doc["pMax"] = fx.panMax;
         doc["tMin"] = fx.tiltMin; doc["tMax"] = fx.tiltMax;
+
+        // Zusatzkanäle: nur die, die der Fixture-Typ hat
+        const FixtureDefinition *def = getFixtureDef(fx.type);
+        JsonObject extras = doc["extras"].to<JsonObject>();
+        for (int e = 0; e < EXTRA_COUNT; e++) {
+            if (def && def->offsetExtra[e] >= 0) extras[EXTRA_NAMES[e]] = fx.extra[e];
+        }
         String json;
         serializeJson(doc, json);
         req->send(200, "application/json", json);
@@ -241,6 +448,7 @@ void setupWeb() {
             StateLock lock;
             hexToRGB(req->getParam("hex")->value(), state.colorR, state.colorG, state.colorB);
             state.currentEffect = "static"; 
+            state.fadeRequest = true;
             markConfigDirty();
         }
         req->send(200, "text/plain", "OK");
@@ -258,6 +466,7 @@ void setupWeb() {
         if (req->hasParam("name")) {
             String name = req->getParam("name")->value();
             StateLock lock;
+            if (state.currentEffect != name) state.fadeRequest = true;
             state.currentEffect = name;
             markConfigDirty();
         }
@@ -287,15 +496,7 @@ void setupWeb() {
         }
         JsonObject types = doc["fixtureTypes"].to<JsonObject>();
         for (auto &kv : state.fixtureTypes) {
-            JsonObject t = types[kv.first].to<JsonObject>();
-            t["channels"] = kv.second.channels;
-            t["offsetDimmer"] = kv.second.offsetDimmer;
-            t["offsetR"] = kv.second.offsetR;
-            t["offsetG"] = kv.second.offsetG;
-            t["offsetB"] = kv.second.offsetB;
-            t["offsetW"] = kv.second.offsetW;
-            t["offsetPan"] = kv.second.offsetPan;
-            t["offsetTilt"] = kv.second.offsetTilt;
+            fixtureDefToJson(types[kv.first].to<JsonObject>(), kv.second);
         }
         doc["master"] = state.master;
         doc["effect"] = state.currentEffect;
@@ -305,6 +506,14 @@ void setupWeb() {
         char hex[8];
         snprintf(hex, sizeof(hex), "#%02x%02x%02x", state.colorR, state.colorG, state.colorB);
         doc["color"] = hex;
+        doc["dropAction"]   = state.dropAction;
+        doc["dropPreset"]   = state.dropPreset;
+        doc["beatSync"]     = state.beatSync;
+        doc["stepsPerBeat"] = state.stepsPerBeat;
+        doc["movePattern"]  = state.movePattern;
+        doc["moveSpread"]   = state.moveSpread;
+        doc["autoShow"]     = state.autoShow;
+        doc["showBeats"]    = state.showBeats;
         String json;
         serializeJson(doc, json);
         req->send(200, "application/json", json);
@@ -339,6 +548,7 @@ void setupWeb() {
                     fx.panMin = old.panMin;   fx.panMax = old.panMax;
                     fx.tiltMin = old.tiltMin; fx.tiltMax = old.tiltMax;
                     fx.isAutoMoving = old.isAutoMoving;
+                    memcpy(fx.extra, old.extra, sizeof(fx.extra));
                     break;
                 }
             }
@@ -346,20 +556,10 @@ void setupWeb() {
         }
         state.fixtureTypes.clear();
         for (JsonPair kv : doc["fixtureTypes"].as<JsonObject>()) {
-            FixtureDefinition def;
-            JsonObject t = kv.value().as<JsonObject>();
-            def.channels = t["channels"] | 1;
-            def.offsetDimmer = t["offsetDimmer"] | -1;
-            def.offsetR = t["offsetR"] | -1;
-            def.offsetG = t["offsetG"] | -1;
-            def.offsetB = t["offsetB"] | -1;
-            def.offsetW = t["offsetW"] | -1;
-            def.offsetPan = t["offsetPan"] | -1;
-            def.offsetTilt = t["offsetTilt"] | -1;
-            state.fixtureTypes[kv.key().c_str()] = def;
+            state.fixtureTypes[kv.key().c_str()] = fixtureDefFromJson(kv.value().as<JsonObject>());
         }
-        updateDMXChannelCount();
         memset(state.dmx, 0, sizeof(state.dmx)); // Alte Werte auf verschobenen Adressen löschen
+        updateDMXChannelCount();                 // setzt auch Gobo & Co. wieder
 
         // Flash-Schreiben und DMX-Neustart übernimmt der Effekt-Task
         state.dmxReinit = true;

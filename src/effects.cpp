@@ -9,17 +9,36 @@ extern ControllerState state;
 // Buffer für Sparkle (wächst mit der Anzahl der Fixtures)
 static std::vector<uint8_t> sparkleBuf;
 
-// Hilfsfunktion: Zeitfaktor aus Timer-Speed
-float getT() {
-    return millis() * (1.0f / max(1, state.timerSpeed));
+// Zentrale "Uhr" aller Effekte: Position in Effekt-Schritten.
+// Normal:    1 Schritt = timerSpeed ms (Speed-Regler)
+// Im Takt:   1 Schritt = 1/stepsPerBeat Beat; die Schritte liegen genau auf den
+//            erkannten (oder getappten) Beats, weil sie aus dem Beat-Zähler kommen
+static double stepPos() {
+    if (state.beatSync && state.bpm >= 30) {
+        double interval = 60000.0 / state.bpm;
+        double frac = (millis() - state.lastBeatMs) / interval; // Anteil bis zum nächsten Beat
+        if (frac < 0) frac = 0;
+        if (frac > 0.999) frac = 0.999; // nicht über den nächsten (noch nicht erkannten) Beat hinaus
+        return (state.beatCount + frac) * state.stepsPerBeat;
+    }
+    return millis() / (double)max(1, state.timerSpeed);
 }
 
-// Hilfsfunktion: Ping-Pong-Position (0 … n-1 … 0) aus Timer-Speed
+// Aktueller Schritt (für Chase, Bounce …) und Fortschritt innerhalb des Schritts (0…1)
+static long   stepIndex() { return (long)stepPos(); }
+static double stepPhase() { double p = stepPos(); return p - floor(p); }
+
+// Zeitfaktor für die Wellen-Effekte (gleiche Einheit wie bisher: Schritte)
+float getT() {
+    return (float)stepPos();
+}
+
+// Hilfsfunktion: Ping-Pong-Position (0 … n-1 … 0)
 static int bouncePos() {
     int n = state.fixtures.size();
     if (n < 2) return 0;
     int period = 2 * (n - 1);
-    int step = (millis() / max(1, state.timerSpeed)) % period;
+    int step = stepIndex() % period;
     return step < n ? step : period - step;
 }
 
@@ -68,7 +87,7 @@ void effectRainbowWave() {
 // CHASE
 // --------------------------------------------------
 void effectChase() {
-    int pos = (millis() / state.timerSpeed) % state.fixtures.size();
+    int pos = stepIndex() % state.fixtures.size();
 
     for (int i = 0; i < state.fixtures.size(); i++) {
         uint8_t v = (i == pos) ? 255 : 0;
@@ -138,7 +157,7 @@ void effectSparkle() {
 // STROBE
 // --------------------------------------------------
 void effectStrobe() {
-    uint8_t v = (millis() % state.timerSpeed < state.timerSpeed / 4) ? 255 : 0;
+    uint8_t v = (stepPhase() < 0.25) ? 255 : 0;
 
     for (int i = 0; i < state.fixtures.size(); i++) {
         setFixtureColor(i, v, v, v, 255);
@@ -221,7 +240,7 @@ void effectSunset() {
 // FULL STROBE
 // --------------------------------------------------
 void effectFullStrobe() {
-    uint8_t v = (millis() % state.timerSpeed < state.timerSpeed / 5) ? 255 : 0;
+    uint8_t v = (stepPhase() < 0.2) ? 255 : 0;
 
     for (int i = 0; i < state.fixtures.size(); i++) {
         setFixtureColor(i, v, v, v, 255);
@@ -254,7 +273,7 @@ void effectDimmerWave() {
 // DIMMER CHASE
 // --------------------------------------------------
 void effectDimmerChase() {
-    int pos = (millis() / state.timerSpeed) % state.fixtures.size();
+    int pos = stepIndex() % state.fixtures.size();
 
     for (int i = 0; i < state.fixtures.size(); i++) {
         uint8_t v = (i == pos) ? 255 : 0;
@@ -279,17 +298,7 @@ void effectDimmerBounce() {
 // DISCO (Audio Beat → Farbwechsel)
 // --------------------------------------------------
 void effectDisco() {
-    // --- DROP LOGIK (Stroboskop-Gewitter) ---
-    if (state.drop) {
-        // Blitzt extrem schnell (alle 40ms Wechsel)
-        bool flash = (millis() / 40) % 2 == 0;
-        uint8_t s = flash ? 255 : 0;
-        
-        for (int i = 0; i < state.fixtures.size(); i++) {
-            setFixtureColor(i, s, s, s, 255); // Alle Lampen synchron Weiß/Aus
-        }
-        return; // Rest überspringen
-    }
+    // (Drops werden zentral behandelt, siehe effectDropReaction)
 
     // --- NORMALER DISCO BEAT ---
     if (state.beat) {
@@ -320,20 +329,10 @@ void effectDisco2() {
 
     // Speichert, welche Farbe gerade für welches Fixture aktiv ist
     static std::vector<int> fixtureColorIdx;
-    static bool strobeState = false;
 
     if (fixtureColorIdx.size() < state.fixtures.size()) fixtureColorIdx.resize(state.fixtures.size(), 0);
 
-    // --- DROP LOGIK (Stroboskop) ---
-    // state.drop wird in der audio.cpp gesetzt, wenn die Energie extrem steigt
-    if (state.drop) {
-        strobeState = !strobeState; // Schnelles Umschalten für Strobe-Effekt
-        uint8_t s = strobeState ? 255 : 0;
-        for (int i = 0; i < state.fixtures.size(); i++) {
-            setFixtureColor(i, s, s, s, 255); // Alle Weiß oder Aus
-        }
-        return; // Rest überspringen, solange Drop aktiv ist
-    }
+    // (Drops werden zentral behandelt, siehe effectDropReaction)
 
     // --- NORMALER BEAT (Farbwechsel) ---
     if (state.beat) {
@@ -389,6 +388,41 @@ void effectRetro() {
 
 
 
+
+// --------------------------------------------------
+// DROP-REAKTION (überschreibt den Effekt für DROP_HOLD_MS)
+// --------------------------------------------------
+void effectDropReaction(uint8_t action, unsigned long elapsed) {
+    int n = state.fixtures.size();
+
+    if (action == DROP_FLASH) {
+        // Weißer Blitz, der über die Drop-Dauer ausblendet
+        float k = 1.0f - min(1.0f, elapsed / (float)DROP_HOLD_MS);
+        uint8_t v = k * k * 255; // quadratisch → kräftiger Anfang, weiches Ende
+        for (int i = 0; i < n; i++) setFixtureColor(i, v, v, v, 255);
+        return;
+    }
+
+    if (action == DROP_COLORBURST) {
+        // Schnell wechselnde, kräftige Farben – jede Lampe anders
+        static const uint8_t palette[6][3] = {
+            {255, 0, 0}, {0, 255, 0}, {0, 0, 255}, {255, 255, 0}, {255, 0, 255}, {0, 255, 255}
+        };
+        static std::vector<uint8_t> idx;
+        static unsigned long lastChange = 0;
+        if (idx.size() < (size_t)n) idx.resize(n, 0);
+        if (millis() - lastChange > 80) {
+            for (int i = 0; i < n; i++) idx[i] = random(0, 6);
+            lastChange = millis();
+        }
+        for (int i = 0; i < n; i++) setFixtureColor(i, palette[idx[i]][0], palette[idx[i]][1], palette[idx[i]][2], 255);
+        return;
+    }
+
+    // DROP_STROBE (Standard): alle Lampen synchron weiß/aus, alle 40 ms Wechsel
+    uint8_t s = ((millis() / 40) % 2 == 0) ? 255 : 0;
+    for (int i = 0; i < n; i++) setFixtureColor(i, s, s, s, 255);
+}
 
 // --------------------------------------------------
 // MANUELLER STROBE (Knopf in der Web-UI)

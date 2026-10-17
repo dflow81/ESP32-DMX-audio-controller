@@ -42,6 +42,7 @@ struct BeatDetector {
 BeatDetector kickDet, snareDet, hihatDet;
 
 unsigned long lastKickTime = 0;
+unsigned long nextClockBeat = 0;   // Interner Beat-Takt bei Tap-Tempo
 
 // ------------------------------------------------------------
 // Drop-Erkennung
@@ -54,7 +55,6 @@ unsigned long lastKickTime = 0;
 #define DROP_KICK_STRENGTH    0.7   // Kick nach dem Breakdown muss >= 70% eines normalen Kicks haben
 #define DROP_ENERGY_RATIO     2.0   // Energiesprung kurz/lang für den zweiten Erkennungsweg
 #define DROP_LOCKOUT_MS      8000   // Mindestabstand zwischen zwei Drops
-#define DROP_HOLD_MS         1200   // So lange bleibt state.drop aktiv
 
 unsigned long lastDrop = 0;
 int    grooveKicks = 0;       // Kicks in Folge (Abstand < DROP_BREAK_MIN_MS)
@@ -75,7 +75,8 @@ double bandEnergy(int startBin, int endBin) {
 
 void updateKickBPM() {
     unsigned long now = millis();
-    if (lastKickTime > 0) {
+    // Bei festgehaltenem BPM (Tap-Tempo) nicht aus der Musik nachführen
+    if (lastKickTime > 0 && !state.bpmLocked) {
         unsigned long diff = now - lastKickTime;
         if (diff > 270 && diff < 1333) { 
             float instantBPM = 60000.0f / diff;
@@ -205,11 +206,33 @@ void taskAudio(void *pv) {
 
         unsigned long sinceLastKick = millis() - lastKickTime; // vor updateKickBPM() merken
         if (isKick) {
-            state.lastBeatMs = millis();
-            state.beatCount++;   // Effekt-Task wertet die Änderung aus
-            updateKickBPM();
-        } else if (millis() - lastKickTime > 4000) {
+            if (!state.bpmLocked) {
+                state.lastBeatMs = millis();
+                state.beatCount++;   // Effekt-Task wertet die Änderung aus
+            }
+            updateKickBPM();         // merkt sich den Kick auch für die Drop-Erkennung
+        } else if (!state.bpmLocked && millis() - lastKickTime > 4000) {
             state.bpm = 0; 
+        }
+
+        // Festgehaltenes BPM (Tap-Tempo): Beats kommen aus einem internen Takt
+        if (state.bpmLocked && state.bpm >= 30) {
+            unsigned long now = millis();
+            unsigned long interval = (unsigned long)(60000.0f / state.bpm);
+            unsigned long sync = state.clockSyncMs;
+            if (sync) {
+                // Tap = Beat: sofort zählen und den Takt ab hier ausrichten
+                state.clockSyncMs = 0;
+                state.lastBeatMs = sync;
+                state.beatCount++;
+                nextClockBeat = sync + interval;
+            }
+            if ((long)(now - nextClockBeat) >= 0) {
+                state.lastBeatMs = now;
+                state.beatCount++;
+                nextClockBeat += interval;
+                if ((long)(now - nextClockBeat) >= 0) nextClockBeat = now + interval; // war zu lange weg
+            }
         }
 
         // Gesamtenergie (Rohwert, wie kRaw/sRaw/hRaw)
@@ -219,6 +242,8 @@ void taskAudio(void *pv) {
         if (detectDrop(totalE, isKick, kRaw, sinceLastKick)) {
             state.drop = true;
             dropStartTime = millis();
+            state.dropStartMs = dropStartTime;
+            state.dropCount++;   // Effekt-Task startet die eingestellte Drop-Reaktion
         }
         if (state.drop && (millis() - dropStartTime > DROP_HOLD_MS)) {
             state.drop = false;

@@ -19,9 +19,40 @@ void scheduleRestart(unsigned long delayMs) {
     restartAt = t ? t : 1;
 }
 
+// Auto-Show: schaltet alle showBeats Beats zum nächsten Preset.
+// Ohne erkannte Beats wird mit 120 BPM gerechnet (0,5 s pro Beat).
+// Aufruf im Effekt-Task mit gehaltenem StateLock.
+static void handleAutoShow() {
+    static bool wasOn = false;
+    static uint32_t startBeat = 0;
+    static unsigned long startMs = 0;
+    static int index = -1;
+
+    unsigned long now = millis();
+    bool on = state.autoShow && state.presets.size() >= 2;
+    if (!on || !wasOn) {
+        // (Neu-)Start: ab jetzt zählen
+        startBeat = state.beatCount;
+        startMs = now;
+        wasOn = on;
+        return;
+    }
+
+    bool due = (state.bpm >= 30)
+        ? (state.beatCount - startBeat >= (uint32_t)state.showBeats)
+        : (now - startMs >= (unsigned long)state.showBeats * 500UL);
+    if (!due) return;
+
+    index = (index + 1) % state.presets.size();
+    applyPreset(index, false); // nicht speichern → schont den Flash
+    startBeat = state.beatCount;
+    startMs = now;
+}
+
 // 2. Effekt Task (Core 1)
 void effectTask(void *param) {
     uint32_t lastBeatCount = state.beatCount;
+    uint32_t lastDropCount = state.dropCount;
     bool wasStrobing = false;
 
     while (true) {
@@ -47,14 +78,33 @@ void effectTask(void *param) {
             state.beat = (beats != lastBeatCount);
             lastBeatCount = beats;
 
+            // --- DROP ---
+            uint32_t drops = state.dropCount;
+            bool newDrop = (drops != lastDropCount);
+            lastDropCount = drops;
+            if (newDrop && state.dropAction == DROP_PRESET) {
+                applyPreset(findPreset(state.dropPreset), false);
+            }
+            bool dropReaction = state.drop && state.dropAction != DROP_PRESET &&
+                                millis() - state.dropStartMs < DROP_HOLD_MS;
+
+            // --- AUTO-SHOW ---
+            handleAutoShow();
+
             // --- EFFEKT-LOGIK ---
             const String &fx = state.currentEffect;
             bool hasEffect = (fx != "none" && fx != "");
             bool strobing = (long)(state.manualStrobeUntil - millis()) > 0;
 
             if (strobing) {
-                // Strobe-Knopf gedrückt → überschreibt den Effekt
+                // Strobe-Knopf gedrückt → überschreibt den Effekt (hart, ohne Übergang)
+                cancelFade();
                 effectManualStrobe();
+                updateDMX();
+            } else if (dropReaction) {
+                // Drop erkannt → eingestellte Reaktion überschreibt den Effekt
+                cancelFade();
+                effectDropReaction(state.dropAction, millis() - state.dropStartMs);
                 updateDMX();
             } else if (hasEffect) {
                 runEffect(fx);
@@ -68,7 +118,10 @@ void effectTask(void *param) {
 
             // Dynamisches Delay
             bool audioFx = (fx == "disco" || fx == "disco2" || fx == "retro");
-            delayTime = strobing ? 10 : audioFx ? 20 : (state.timerSpeed / 20);
+            // Während eines Übergangs mit ~50 fps senden, damit er flüssig aussieht
+            // Im Takt ebenfalls 20 ms, damit die Schritte genau auf dem Beat liegen
+            bool fast = audioFx || isFading() || state.beatSync || dropReaction;
+            delayTime = strobing ? 10 : fast ? 20 : (state.timerSpeed / 20);
         }
         vTaskDelay(pdMS_TO_TICKS(max(10, delayTime)));
     }
@@ -100,6 +153,7 @@ void loop() {
     // die Loop kümmert sich um WLAN, OTA-Updates und geplante Neustarts
     handleWiFi();
     handleOTA();
+    handleLiveStatus();
 
     if (restartAt && (long)(millis() - restartAt) >= 0) {
         StateLock lock; // wartet, bis ein laufender Speichervorgang fertig ist

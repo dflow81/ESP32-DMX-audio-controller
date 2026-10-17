@@ -4,6 +4,13 @@
 #include <map>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <ArduinoJson.h>
+
+// Zusatzkanäle für Moving Heads (werden nicht von Effekten verändert,
+// sondern auf der Moving-Head-Seite eingestellt und pro Fixture gespeichert)
+enum ExtraChannel { EXTRA_GOBO, EXTRA_COLORWHEEL, EXTRA_PRISM, EXTRA_FOCUS, EXTRA_COUNT };
+extern const char* const EXTRA_NAMES[EXTRA_COUNT];       // API-Namen: "gobo", "colorWheel", …
+extern const char* const EXTRA_OFFSET_KEYS[EXTRA_COUNT]; // JSON: "offsetGobo", …
 
 struct FixtureDefinition {
     int channels;
@@ -14,6 +21,7 @@ struct FixtureDefinition {
     int offsetW;
     int offsetPan;
     int offsetTilt;
+    int offsetExtra[EXTRA_COUNT]; // -1 = nicht vorhanden
 };
 
 struct Fixture {
@@ -30,7 +38,29 @@ struct Fixture {
     // NEU: Status für BPM-Sync Bewegung
     bool isAutoMoving = false;
     float movePhase = 0.0f; // Interner Zähler für die Schwingung (0.0 bis 1.0)
+
+    // Werte der Zusatzkanäle (Gobo, Farbrad, Prisma, Fokus)
+    uint8_t extra[EXTRA_COUNT] = {0, 0, 0, 0};
 };
+
+// Reaktion auf einen erkannten Drop
+enum DropAction { DROP_STROBE, DROP_FLASH, DROP_COLORBURST, DROP_PRESET, DROP_ACTION_COUNT };
+
+// Bewegungsmuster der Moving Heads bei BPM Auto
+enum MovePattern { MOVE_CIRCLE, MOVE_EIGHT, MOVE_PAN, MOVE_TILT, MOVE_RANDOM, MOVE_PATTERN_COUNT };
+
+#define DROP_HOLD_MS 1200   // So lange dauert die Drop-Reaktion
+
+// Gespeicherte Szene (Preset)
+struct Preset {
+    String  name;
+    String  effect = "static";
+    uint8_t r = 255, g = 0, b = 0;
+    int     timerSpeed = 500;
+    int     master = 255;
+};
+#define MAX_PRESETS      16
+#define PRESET_NAME_MAX  24
 
 struct ControllerState {
     enum Mode {
@@ -65,10 +95,16 @@ struct ControllerState {
     volatile uint32_t beatCount = 0;   // Wird vom Audio-Task bei jedem Kick erhöht
     volatile uint32_t lastBeatMs = 0;  // Zeitpunkt des letzten Kicks
     bool  beat = false;                // Nur im Effekt-Task: neuer Kick seit letztem Frame
-    bool  drop = false;
-    float bpm = 120.0f; // Standardwert für BPM
+    volatile bool drop = false;
+    volatile uint32_t dropCount = 0;      // Wird bei jedem erkannten Drop erhöht
+    volatile unsigned long dropStartMs = 0;
+    volatile float bpm = 120.0f; // Standardwert für BPM
+    volatile bool bpmLocked = false;          // BPM per Tap-Tempo festgehalten → interner Beat-Takt
+    volatile unsigned long clockSyncMs = 0;   // Tap: Beat-Takt auf diesen Zeitpunkt ausrichten
     double level = 0.0;     
     bool dropEnabled = true; // Drop-Erkennung (z. B. für Schlager abschaltbar)
+    uint8_t dropAction = DROP_STROBE;
+    String dropPreset = "";  // Preset-Name für DROP_PRESET
 
     // Frequenz-Energiewerte
     double kickEnergy = 0.0;
@@ -86,6 +122,21 @@ struct ControllerState {
     int chaseIndex = 0;
     int timerSpeed = 500;
     volatile unsigned long manualStrobeUntil = 0; // Strobe-Knopf: aktiv bis zu diesem millis()-Wert
+    volatile bool blackout = false;    // Blackout-Knopf: alle Helligkeitskanäle auf 0 (wird nicht gespeichert)
+    volatile bool fadeRequest = false; // Weicher Übergang zum nächsten Bild (Effekt-/Farbwechsel)
+
+    // Effekte im Takt: Schrittweite aus BPM statt timerSpeed
+    bool  beatSync = false;
+    float stepsPerBeat = 1.0f;  // 2 = halbe Beats, 1 = jeder Beat, 0.5 = alle 2 Beats
+
+    // Moving Heads
+    uint8_t movePattern = MOVE_CIRCLE;
+    bool    moveSpread = true;  // Heads versetzt (Welle) statt synchron
+
+    // Presets + Auto-Show
+    std::vector<Preset> presets;
+    bool autoShow = false;      // Presets automatisch durchschalten
+    int  showBeats = 32;        // … alle so viele Beats
     bool strobeOnFastBass = false;
     int audioThreshold = 45; // Standardwert
 };
@@ -117,6 +168,18 @@ void handleAutoSave();
 
 // Startet den ESP nach delayMs neu (ausgeführt in loop(), damit HTTP-Antworten noch rausgehen)
 void scheduleRestart(unsigned long delayMs);
+
+// FixtureDefinition <-> JSON (gemeinsam für Config und Web-API)
+void fixtureDefToJson(JsonObject t, const FixtureDefinition &d);
+FixtureDefinition fixtureDefFromJson(JsonObject t);
+
+// Preset aufrufen (Aufrufer hält den StateLock). persist=false für Auto-Show/Drop,
+// damit nicht ständig in den Flash geschrieben wird.
+void applyPreset(int index, bool persist);
+int  findPreset(const String &name);   // -1, wenn nicht gefunden
+
+// Schreibt die gespeicherten Zusatzkanäle (Gobo …) aller Fixtures in den DMX-Puffer
+void applyFixtureExtras();
 
 // WICHTIG: Rückgabe der Definition passend zum String-Typ der Fixture
 const FixtureDefinition* getFixtureDef(const String &typeName);

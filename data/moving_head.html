@@ -22,6 +22,13 @@
         .btn-test { background: var(--warn); grid-column: span 2; }
         .btn-auto { background: var(--primary); grid-column: span 2; }
         
+        .section { margin-top: 18px; padding-top: 14px; border-top: 1px solid #333; }
+        .section-title { font-size: 12px; color: #999; text-transform: uppercase; margin-bottom: 8px; }
+        .opt { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-top: 8px; }
+        .extra-row { display: grid; grid-template-columns: 80px 1fr 36px; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; }
+        .extra-row input[type=range] { width: 100%; }
+        .extra-val { text-align: right; color: var(--primary); }
+
         #status { font-size: 11px; color: #666; margin-top: 15px; text-align: center; min-height: 1.2em; }
         .led { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #444; margin-right: 5px; }
         .led.active { background: #00ff00; box-shadow: 0 0 5px #00ff00; }
@@ -45,6 +52,23 @@
         <button id="testBtn" class="btn-test" onclick="toggleTestMove()">MOTOR-TEST STARTEN</button>
         
         <button class="btn-auto" onclick="sendCmd('toggleAuto')">BPM AUTO START/STOP</button>
+    </div>
+
+    <div class="section">
+        <div class="section-title">Bewegung bei BPM Auto (alle Heads)</div>
+        <select id="movePattern" onchange="saveMovement()">
+            <option value="0">Kreis (springt im Takt)</option>
+            <option value="1">Liegende Acht</option>
+            <option value="2">Schwenk links/rechts</option>
+            <option value="3">Nicken hoch/runter</option>
+            <option value="4">Zufällige Positionen</option>
+        </select>
+        <label class="opt"><input type="checkbox" id="moveSpread" onchange="saveMovement()" checked> Heads versetzt (Welle)</label>
+    </div>
+
+    <div class="section" id="extrasSection" style="display:none;">
+        <div class="section-title">Zusatzkanäle (gewählter Head)</div>
+        <div id="extras"></div>
     </div>
 
     <div id="status"><span id="statusLed" class="led"></span> <span id="statusTxt">Verbunden</span></div>
@@ -80,8 +104,61 @@
         if(currentId === "-1") return;
         fetch(`/api/select?id=${currentId}`)
             .then(res => res.json())
-            .then(fx => setStatus(`${fx.name}: BPM Auto ${fx.auto ? "AN" : "AUS"}`))
+            .then(fx => {
+                setStatus(`${fx.name}: BPM Auto ${fx.auto ? "AN" : "AUS"}`);
+                showExtras(fx.extras || {});
+            })
             .catch(e => setStatus("Fehler beim Auswählen!", true));
+    }
+
+    // Bewegungsmuster (gilt für alle Heads)
+    function loadMovement() {
+        fetch('/api/getConfig').then(r => r.json()).then(cfg => {
+            if (cfg.movePattern !== undefined) document.getElementById('movePattern').value = String(cfg.movePattern);
+            if (cfg.moveSpread !== undefined) document.getElementById('moveSpread').checked = cfg.moveSpread;
+        });
+    }
+
+    function saveMovement() {
+        const p = document.getElementById('movePattern').value;
+        const s = document.getElementById('moveSpread').checked ? 1 : 0;
+        fetch(`/api/settings?movePattern=${p}&moveSpread=${s}`).then(() => setStatus("Bewegung gespeichert"));
+    }
+
+    // Zusatzkanäle: nur die anzeigen, die der Fixture-Typ hat (in der DMX-Config einstellbar)
+    const EXTRA_LABELS = { gobo: "Gobo", colorWheel: "Farbrad", prism: "Prisma", focus: "Fokus" };
+    let extraTimer = {};
+
+    function showExtras(extras) {
+        const box = document.getElementById('extras');
+        box.innerHTML = "";
+        const keys = Object.keys(extras);
+        document.getElementById('extrasSection').style.display = keys.length ? "" : "none";
+        keys.forEach(key => {
+            const row = document.createElement('div');
+            row.className = "extra-row";
+
+            const label = document.createElement('span');
+            label.textContent = EXTRA_LABELS[key] || key;
+
+            const slider = document.createElement('input');
+            slider.type = "range"; slider.min = 0; slider.max = 255; slider.value = extras[key];
+
+            const val = document.createElement('span');
+            val.className = "extra-val";
+            val.textContent = extras[key];
+
+            slider.oninput = () => {
+                val.textContent = slider.value;
+                // erst senden, wenn der Regler 100 ms ruht (schont den ESP)
+                clearTimeout(extraTimer[key]);
+                extraTimer[key] = setTimeout(() =>
+                    fetch(`/api/setExtra?id=${currentId}&ch=${key}&v=${slider.value}`), 100);
+            };
+
+            row.append(label, slider, val);
+            box.appendChild(row);
+        });
     }
 
     function sendCmd(path) {
@@ -153,7 +230,7 @@
         }
     });
 
-    window.onload = loadList;
+    window.onload = () => { loadList(); loadMovement(); };
 </script>
 
 </body>

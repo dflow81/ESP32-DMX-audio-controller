@@ -45,7 +45,7 @@
             <tr>
                 <th>Name</th>
                 <th>Kanäle</th>
-                <th>Offsets (Dim,R,G,B,W,Pan,Tilt)</th>
+                <th>Offsets (Dim,R,G,B,W,Pan,Tilt | Gobo,Farbrad,Prisma,Fokus)</th>
                 <th>Aktion</th>
             </tr>
         </thead>
@@ -62,7 +62,12 @@
     <input id="tW" type="number" placeholder="W">
     <input id="tPan" type="number" placeholder="Pan">
     <input id="tTilt" type="number" placeholder="Tilt">
+    <input id="tGobo" type="number" placeholder="Gobo">
+    <input id="tColorWheel" type="number" placeholder="Farbrad">
+    <input id="tPrism" type="number" placeholder="Prisma">
+    <input id="tFocus" type="number" placeholder="Fokus">
     <button onclick="addType()">Typ hinzufügen</button>
+    <p style="font-size:12px; color:#888;">Offsets zählen ab 0 (erster Kanal des Geräts = 0). Leer lassen, wenn das Gerät den Kanal nicht hat.</p>
 </div>
 
 <button class="btn-save" onclick="saveConfig()">Konfiguration speichern</button>
@@ -138,7 +143,8 @@ function renderTypes() {
         const row = document.createElement("tr");
         row.innerHTML = `
             <td>${name}</td><td>${def.channels}</td>
-            <td>${def.offsetDimmer}, ${def.offsetR}, ${def.offsetG}, ${def.offsetB}, ${def.offsetW}, ${def.offsetPan}, ${def.offsetTilt}</td>
+            <td>${def.offsetDimmer}, ${def.offsetR}, ${def.offsetG}, ${def.offsetB}, ${def.offsetW}, ${def.offsetPan}, ${def.offsetTilt}
+                | ${fmtOff(def.offsetGobo)}, ${fmtOff(def.offsetColorWheel)}, ${fmtOff(def.offsetPrism)}, ${fmtOff(def.offsetFocus)}</td>
             <td><button onclick="deleteType('${name}')">Löschen</button></td>
         `;
         tbody.appendChild(row);
@@ -162,18 +168,30 @@ function addFixture() {
 
 function deleteFixture(i) { config.fixtures.splice(i, 1); renderFixtures(); }
 
+// Leeres Feld = Kanal nicht vorhanden (-1); "0" ist ein gültiger Offset!
+function readOffset(id) {
+    const v = document.getElementById(id).value.trim();
+    return v === "" ? -1 : parseInt(v);
+}
+
+function fmtOff(v) { return (v === undefined || v < 0) ? "–" : v; }
+
 function addType() {
     const name = document.getElementById("tName").value;
     if (!name) return;
     config.fixtureTypes[name] = {
         channels: parseInt(document.getElementById("tChannels").value) || 1,
-        offsetDimmer: parseInt(document.getElementById("tDim").value) || 0,
-        offsetR: parseInt(document.getElementById("tR").value) || 0,
-        offsetG: parseInt(document.getElementById("tG").value) || 0,
-        offsetB: parseInt(document.getElementById("tB").value) || 0,
-        offsetW: parseInt(document.getElementById("tW").value) || 0,
-        offsetPan: parseInt(document.getElementById("tPan").value) || 0,
-        offsetTilt: parseInt(document.getElementById("tTilt").value) || 0
+        offsetDimmer: readOffset("tDim"),
+        offsetR: readOffset("tR"),
+        offsetG: readOffset("tG"),
+        offsetB: readOffset("tB"),
+        offsetW: readOffset("tW"),
+        offsetPan: readOffset("tPan"),
+        offsetTilt: readOffset("tTilt"),
+        offsetGobo: readOffset("tGobo"),
+        offsetColorWheel: readOffset("tColorWheel"),
+        offsetPrism: readOffset("tPrism"),
+        offsetFocus: readOffset("tFocus")
     };
     renderTypes(); renderFixtures();
 }
