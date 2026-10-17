@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DMX Monitor</title>
+    <link rel="stylesheet" href="/style.css">
+    <style>
+        .mon-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .mon-head .info { font-size: 12px; color: #888; flex: 1; }
+        .fx-block { margin-top: 16px; }
+        .fx-title { font-size: 13px; color: #ccc; margin-bottom: 6px; }
+        .fx-title small { color: #777; }
+        .cells { display: grid; grid-template-columns: repeat(auto-fill, minmax(46px, 1fr)); gap: 4px; }
+        .cell {
+            position: relative; height: 46px; border-radius: 4px; background: #222;
+            overflow: hidden; border: 1px solid #333; font-family: monospace;
+        }
+        .cell .bar { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: #4fc3f7; opacity: .55; }
+        .cell .ch  { position: absolute; top: 2px; left: 4px; font-size: 9px; color: #888; }
+        .cell .fn  { position: absolute; top: 2px; right: 4px; font-size: 9px; color: #aaa; }
+        .cell .val { position: absolute; bottom: 3px; left: 0; right: 0; text-align: center; font-size: 13px; color: #fff; }
+        .legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 11px; color: #999; margin-top: 10px; }
+        .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; background: var(--c); }
+    </style>
+</head>
+<body>
+
+<div class="nav">
+    <img src="/logo.svg" style="height:32px; width:auto; margin-right:15px; vertical-align:middle;">
+    <a href="/">Home</a>
+    <a href="/wifi">WLAN</a>
+    <a href="/dmxconfig">DMX</a>
+    <a href="/mh">Moving Head</a>
+    <a href="/monitor" class="active">Monitor</a>
+    <a href="/update">Update</a>
+</div>
+
+<div class="container">
+    <div class="card">
+        <div class="mon-head">
+            <span>DMX-Monitor</span>
+            <span class="info" id="info">Lade …</span>
+            <button id="pauseBtn" onclick="togglePause()">Pause</button>
+        </div>
+        <div class="legend">
+            <span style="--c:#ffd54f">Dimmer</span>
+            <span style="--c:#ff5252">Rot</span>
+            <span style="--c:#69f0ae">Grün</span>
+            <span style="--c:#448aff">Blau</span>
+            <span style="--c:#eeeeee">Weiß</span>
+            <span style="--c:#b388ff">Pan/Tilt</span>
+            <span style="--c:#ffab40">Gobo/Farbrad/Prisma/Fokus</span>
+            <span style="--c:#4fc3f7">sonstige</span>
+        </div>
+        <div id="blocks"></div>
+    </div>
+</div>
+
+<script>
+// Funktion eines Kanals → Kürzel + Farbe
+const FUNCS = [
+    ["offsetDimmer", "Dim", "#ffd54f"],
+    ["offsetR", "R", "#ff5252"],
+    ["offsetG", "G", "#69f0ae"],
+    ["offsetB", "B", "#448aff"],
+    ["offsetW", "W", "#eeeeee"],
+    ["offsetPan", "Pan", "#b388ff"],
+    ["offsetTilt", "Tilt", "#b388ff"],
+    ["offsetGobo", "Gobo", "#ffab40"],
+    ["offsetColorWheel", "Farb", "#ffab40"],
+    ["offsetPrism", "Prism", "#ffab40"],
+    ["offsetFocus", "Fok", "#ffab40"]
+];
+
+let cells = [];        // Index = Kanal-1 → {bar, val}
+let paused = false;
+let config = null;
+let builtFor = -1;     // Kanalanzahl, für die das Raster gebaut wurde
+
+function makeCell(ch, fn, color) {
+    const cell = document.createElement("div");
+    cell.className = "cell";
+    const bar = document.createElement("div");
+    bar.className = "bar";
+    bar.style.background = color;
+    const chEl = document.createElement("span");
+    chEl.className = "ch";
+    chEl.textContent = ch;
+    const fnEl = document.createElement("span");
+    fnEl.className = "fn";
+    fnEl.textContent = fn;
+    const val = document.createElement("span");
+    val.className = "val";
+    val.textContent = "0";
+    cell.append(bar, chEl, fnEl, val);
+    cells[ch - 1] = { bar, val, last: -1 };
+    return cell;
+}
+
+function addBlock(title, sub, channels) {
+    const block = document.createElement("div");
+    block.className = "fx-block";
+    const t = document.createElement("div");
+    t.className = "fx-title";
+    t.textContent = title + " ";
+    const small = document.createElement("small");
+    small.textContent = sub;
+    t.appendChild(small);
+    const grid = document.createElement("div");
+    grid.className = "cells";
+    channels.forEach(c => grid.appendChild(makeCell(c.ch, c.fn, c.color)));
+    block.append(t, grid);
+    document.getElementById("blocks").appendChild(block);
+}
+
+// Raster bauen: ein Block pro Fixture, danach alle übrigen gesendeten Kanäle
+function build(total) {
+    document.getElementById("blocks").innerHTML = "";
+    cells = [];
+    const used = new Set();
+
+    (config.fixtures || []).forEach(fx => {
+        const def = config.fixtureTypes[fx.type];
+        if (!def) return;
+        const chans = [];
+        for (let o = 0; o < def.channels; o++) {
+            const ch = fx.start + o;
+            if (ch > 512 || used.has(ch)) continue;
+            const f = FUNCS.find(f => def[f[0]] === o);
+            chans.push({ ch, fn: f ? f[1] : "", color: f ? f[2] : "#4fc3f7" });
+            used.add(ch);
+        }
+        addBlock(fx.name, `${fx.type} · Kanal ${fx.start}–${fx.start + def.channels - 1}`, chans);
+    });
+
+    const rest = [];
+    for (let ch = 1; ch <= total; ch++) {
+        if (!used.has(ch)) rest.push({ ch, fn: "", color: "#4fc3f7" });
+    }
+    if (rest.length) addBlock("Weitere Kanäle", "ohne Fixture (z. B. von Art-Net)", rest);
+    builtFor = total;
+}
+
+function poll() {
+    if (paused || document.hidden || !config) return;
+    fetch("/api/dmx", { cache: "no-store" })
+        .then(r => r.arrayBuffer())
+        .then(buf => {
+            const data = new Uint8Array(buf);
+            if (data.length !== builtFor) build(data.length);
+            for (let i = 0; i < data.length; i++) {
+                const c = cells[i];
+                if (!c || c.last === data[i]) continue; // nur Änderungen zeichnen
+                c.last = data[i];
+                c.val.textContent = data[i];
+                c.bar.style.height = (data[i] / 255 * 100) + "%";
+            }
+            document.getElementById("info").textContent =
+                `${data.length} Kanäle werden gesendet · ${new Date().toLocaleTimeString()}`;
+        })
+        .catch(() => document.getElementById("info").textContent = "Keine Verbindung …");
+}
+
+function togglePause() {
+    paused = !paused;
+    document.getElementById("pauseBtn").textContent = paused ? "Weiter" : "Pause";
+}
+
+fetch("/api/getConfig").then(r => r.json()).then(cfg => {
+    config = cfg;
+    poll();
+    setInterval(poll, 150);
+});
+</script>
+</body>
+</html>

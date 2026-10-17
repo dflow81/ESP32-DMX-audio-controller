@@ -28,6 +28,13 @@ void setFixtureMovement(int index, uint8_t pan, uint8_t tilt);
 bool isFading();
 void cancelFade();
 
+// Gibt ein komplettes DMX-Bild aus dem Netzwerk (Art-Net/sACN) unverändert aus.
+// Nur Blackout wirkt noch (Sicherheit); Master und Effekte nicht.
+void updateDMXFromNetwork(const uint8_t *data, int len);
+
+// Kopiert die zuletzt gesendeten Kanalwerte (für den DMX-Monitor), gibt die Anzahl zurück
+int getDMXOutput(uint8_t *buf, int maxLen);
+
 // Konstanten für die DMX-Schnittstelle
 #define DMX_BAUD 250000
 #define DMX_FORMAT SERIAL_8N2

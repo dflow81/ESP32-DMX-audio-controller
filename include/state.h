@@ -76,7 +76,7 @@ struct ControllerState {
     uint8_t dmxPreview[512];
     bool dimmable[512];          // Vorberechnet: Kanal wird vom Master gedimmt
     int numChannels = 0;
-    volatile bool otaActive = false; // OTA-Update läuft → nicht in den Flash speichern
+    volatile bool otaActive = false; // OTA-Update/Wiederherstellung läuft → nicht mehr in den Flash speichern
     volatile bool dmxReinit = false; // Web-UI fordert Neustart der DMX-Schnittstelle an
     std::vector<Fixture> fixtures;
     std::map<String, FixtureDefinition> fixtureTypes;
@@ -137,6 +137,10 @@ struct ControllerState {
     std::vector<Preset> presets;
     bool autoShow = false;      // Presets automatisch durchschalten
     int  showBeats = 32;        // … alle so viele Beats
+
+    // Netzwerk-Eingang: Steuerung durch PC-Software per Art-Net / sACN
+    bool netInput = false;
+    int  netUniverse = 1;       // wie in QLC+ angezeigt (Art-Net = Universum-1, sACN = Universum)
     bool strobeOnFastBass = false;
     int audioThreshold = 45; // Standardwert
 };
@@ -164,6 +168,12 @@ void saveConfig();
 void saveDefaultConfig();
 void loadConfig();
 void markConfigDirty();
+
+// Backup: aktuelle Config als JSON (ohne WLAN-Zugangsdaten)
+String exportConfigJson();
+// Wiederherstellung: prüft das JSON und schreibt es ins NVS (WLAN-Daten bleiben).
+// Danach ist ein Neustart nötig; bis dahin wird nicht mehr gespeichert.
+bool importConfigJson(const char *json, size_t len, String &error);
 void handleAutoSave();
 
 // Startet den ESP nach delayMs neu (ausgeführt in loop(), damit HTTP-Antworten noch rausgehen)

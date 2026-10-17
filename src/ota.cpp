@@ -46,6 +46,7 @@ static const char UPDATE_PAGE[] PROGMEM = R"rawliteral(<!DOCTYPE html>
   <a href="/wifi">WLAN</a>
   <a href="/dmxconfig">DMX</a>
   <a href="/mh">Moving Head</a>
+  <a href="/monitor">Monitor</a>
   <a href="/update" class="active">Update</a>
 </div>
 <div class="ota">
@@ -63,11 +64,36 @@ static const char UPDATE_PAGE[] PROGMEM = R"rawliteral(<!DOCTYPE html>
     <button onclick="upload('fs','fs')">Dateisystem hochladen</button>
   </div>
   <div class="card">
+    <b>Einstellungen sichern</b>
+    <div class="hint">Fixtures, Typen, Presets und alle Einstellungen als Datei.
+      Das WLAN-Passwort ist nicht enthalten und bleibt beim Wiederherstellen erhalten.</div>
+    <a href="/api/backup" download="dmx-backup.json"><button style="margin-top:12px;">Backup herunterladen</button></a>
+    <input type="file" id="backupFile" accept=".json,application/json">
+    <button onclick="restoreBackup()">Backup wiederherstellen</button>
+  </div>
+  <div class="card">
     <div class="bar"><div class="fill" id="fill"></div></div>
     <div id="msg"></div>
   </div>
 </div>
 <script>
+function restoreBackup() {
+  const file = document.getElementById("backupFile").files[0];
+  const msg = document.getElementById("msg");
+  if (!file) { msg.textContent = "Bitte zuerst eine Backup-Datei wählen."; return; }
+  if (!confirm("Alle aktuellen Einstellungen durch das Backup ersetzen?")) return;
+  file.text().then(text => fetch("/api/restore", { method: "POST", body: text }))
+    .then(async r => {
+      if (r.ok) {
+        msg.textContent = "Backup wiederhergestellt. Neustart … die Seite lädt gleich neu.";
+        setTimeout(() => location.href = "/", 8000);
+      } else {
+        msg.textContent = "Fehler: " + await r.text();
+      }
+    })
+    .catch(() => msg.textContent = "Verbindung abgebrochen.");
+}
+
 function upload(inputId, type) {
   const file = document.getElementById(inputId).files[0];
   const msg = document.getElementById("msg");

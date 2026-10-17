@@ -358,3 +358,13 @@ input[type="range"]::-webkit-slider-thumb {
 input[type="range"]:disabled {
     opacity: 0.4;
 }
+
+/* Hinweis: PC steuert per Art-Net/sACN */
+.net-badge {
+    margin-top: 10px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: #1d3a4a;
+    color: #4fc3f7;
+    font-size: 12px;
+}

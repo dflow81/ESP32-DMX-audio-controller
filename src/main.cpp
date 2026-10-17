@@ -7,6 +7,7 @@
 #include "effects.h"
 #include "wifi.h"
 #include "ota.h"
+#include "netinput.h"
 
 // 1. Extern bekannt machen
 extern void taskAudio(void *pv); 
@@ -49,11 +50,49 @@ static void handleAutoShow() {
     startMs = now;
 }
 
+// Ein Bild der normalen Effekt-Steuerung berechnen und senden.
+// Gibt die Wartezeit bis zum nächsten Bild zurück. Aufruf mit gehaltenem StateLock.
+static int runEffectFrame(bool dropReaction, bool &wasStrobing) {
+    // --- EFFEKT-LOGIK ---
+    const String &fx = state.currentEffect;
+    bool hasEffect = (fx != "none" && fx != "");
+    bool strobing = (long)(state.manualStrobeUntil - millis()) > 0;
+
+    if (strobing) {
+        // Strobe-Knopf gedrückt → überschreibt den Effekt (hart, ohne Übergang)
+        cancelFade();
+        effectManualStrobe();
+        updateDMX();
+    } else if (dropReaction) {
+        // Drop erkannt → eingestellte Reaktion überschreibt den Effekt
+        cancelFade();
+        effectDropReaction(state.dropAction, millis() - state.dropStartMs);
+        updateDMX();
+    } else if (hasEffect) {
+        runEffect(fx);
+        updateDMX();
+    } else if (wasStrobing) {
+        // Ohne Effekt nach dem Strobe dunkel schalten statt auf Weiß stehen zu bleiben
+        for (int i = 0; i < (int)state.fixtures.size(); i++) setFixtureColor(i, 0, 0, 0, 0);
+        updateDMX();
+    }
+    wasStrobing = strobing;
+
+    // Dynamisches Delay
+    bool audioFx = (fx == "disco" || fx == "disco2" || fx == "retro");
+    // Während eines Übergangs mit ~50 fps senden, damit er flüssig aussieht
+    // Im Takt ebenfalls 20 ms, damit die Schritte genau auf dem Beat liegen
+    bool fast = audioFx || isFading() || state.beatSync || dropReaction;
+    return strobing ? 10 : fast ? 20 : (state.timerSpeed / 20);
+}
+
 // 2. Effekt Task (Core 1)
 void effectTask(void *param) {
     uint32_t lastBeatCount = state.beatCount;
     uint32_t lastDropCount = state.dropCount;
     bool wasStrobing = false;
+    bool wasNet = false;
+    static uint8_t netFrame[512];
 
     while (true) {
         int delayTime;
@@ -91,37 +130,19 @@ void effectTask(void *param) {
             // --- AUTO-SHOW ---
             handleAutoShow();
 
-            // --- EFFEKT-LOGIK ---
-            const String &fx = state.currentEffect;
-            bool hasEffect = (fx != "none" && fx != "");
-            bool strobing = (long)(state.manualStrobeUntil - millis()) > 0;
-
-            if (strobing) {
-                // Strobe-Knopf gedrückt → überschreibt den Effekt (hart, ohne Übergang)
-                cancelFade();
-                effectManualStrobe();
-                updateDMX();
-            } else if (dropReaction) {
-                // Drop erkannt → eingestellte Reaktion überschreibt den Effekt
-                cancelFade();
-                effectDropReaction(state.dropAction, millis() - state.dropStartMs);
-                updateDMX();
-            } else if (hasEffect) {
-                runEffect(fx);
-                updateDMX();
-            } else if (wasStrobing) {
-                // Ohne Effekt nach dem Strobe dunkel schalten statt auf Weiß stehen zu bleiben
-                for (int i = 0; i < (int)state.fixtures.size(); i++) setFixtureColor(i, 0, 0, 0, 0);
-                updateDMX();
+            // --- PC-STEUERUNG (Art-Net / sACN) ---
+            // Kommen Netzwerk-Daten, werden sie 1:1 ausgegeben; Effekte pausieren
+            if (netInputActive()) {
+                updateDMXFromNetwork(netFrame, copyNetDmx(netFrame));
+                wasNet = true;
+                delayTime = 20;
+            } else {
+                if (wasNet) {
+                    wasNet = false;
+                    state.fadeRequest = true; // weich zurück zur Effekt-Steuerung
+                }
+                delayTime = runEffectFrame(dropReaction, wasStrobing);
             }
-            wasStrobing = strobing;
-
-            // Dynamisches Delay
-            bool audioFx = (fx == "disco" || fx == "disco2" || fx == "retro");
-            // Während eines Übergangs mit ~50 fps senden, damit er flüssig aussieht
-            // Im Takt ebenfalls 20 ms, damit die Schritte genau auf dem Beat liegen
-            bool fast = audioFx || isFading() || state.beatSync || dropReaction;
-            delayTime = strobing ? 10 : fast ? 20 : (state.timerSpeed / 20);
         }
         vTaskDelay(pdMS_TO_TICKS(max(10, delayTime)));
     }
@@ -138,6 +159,7 @@ void setup() {
     setupDMX();
     setupWiFi(); 
     setupWeb(); 
+    setupNetInput(); // Art-Net / sACN, falls eingeschaltet
 
     // Audio Task auf CORE 0
     xTaskCreatePinnedToCore(taskAudio, "AudioTask", 10240, NULL, 2, NULL, 0);

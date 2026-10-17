@@ -14,6 +14,20 @@ uint8_t enPin = 33;
 
 SparkFunDMX dmx;
 
+static int outChannels = 0;        // So viele Kanäle sendet die Schnittstelle gerade
+static uint8_t sentOut[512];       // Zuletzt gesendete Werte (für den DMX-Monitor)
+
+// Passt die Anzahl der gesendeten Kanäle an (z. B. wenn ein PC per Art-Net
+// mehr Kanäle steuert, als Fixtures angelegt sind). Nur bei Änderung.
+static void ensureOutputChannels(int n) {
+    n = constrain(n, 1, 512);
+    if (n == outChannels) return;
+    dmx.begin(dmxSerial, enPin, n);
+    dmx.setComDir(DMX_WRITE_DIR);
+    if (n < outChannels) memset(sentOut + n, 0, outChannels - n);
+    outChannels = n;
+}
+
 // Hilfsfunktion: Prüft, ob ein Kanal gedimmt werden darf
 // (Maske wird in updateDMXChannelCount() vorberechnet)
 bool isDimmableChannel(int channelIndex) {
@@ -73,6 +87,7 @@ void setupDMX() {
     dmxSerial.begin(DMX_BAUD, DMX_FORMAT, rxPin, txPin);
     dmx.begin(dmxSerial, enPin, state.numChannels);
     dmx.setComDir(DMX_WRITE_DIR);
+    outChannels = max(1, state.numChannels);
     Serial.printf("DMX gestartet mit %d Kanälen\n", state.numChannels);
 }
 
@@ -184,6 +199,7 @@ void cancelFade() {
 
 void updateDMX() {
     updateMovements(); // Vor dem Senden Bewegungen berechnen
+    ensureOutputChannels(state.numChannels); // nach Art-Net-Betrieb wieder normal
 
     unsigned long now = millis();
     if (state.fadeRequest) {
@@ -215,7 +231,31 @@ void updateDMX() {
         if (fading) v = fadeFrom[i] + (int)(((int)v - (int)fadeFrom[i]) * t);
         lastOut[i] = v;
 
-        dmx.writeByte((dark && dimmable) ? 0 : v, i + 1);
+        uint8_t out = (dark && dimmable) ? 0 : v;
+        sentOut[i] = out;
+        dmx.writeByte(out, i + 1);
     }
     dmx.update();
+}
+
+void updateDMXFromNetwork(const uint8_t *data, int len) {
+    len = constrain(len, 0, 512);
+    ensureOutputChannels(max(len, state.numChannels));
+    cancelFade();
+
+    bool dark = state.blackout;
+    for (int i = 0; i < outChannels; i++) {
+        uint8_t v = i < len ? data[i] : 0;
+        lastOut[i] = v; // damit nach dem Art-Net-Betrieb sauber übergeblendet wird
+        uint8_t out = (dark && isDimmableChannel(i)) ? 0 : v;
+        sentOut[i] = out;
+        dmx.writeByte(out, i + 1);
+    }
+    dmx.update();
+}
+
+int getDMXOutput(uint8_t *buf, int maxLen) {
+    int n = min(outChannels, maxLen);
+    memcpy(buf, sentOut, n);
+    return n;
 }

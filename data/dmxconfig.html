@@ -14,6 +14,7 @@
     <a href="/">Home</a>
     <a href="/wifi">LAN</a>
     <a href="/dmxconfig" class="active">DMX</a>
+    <a href="/monitor">Monitor</a>
     <a href="/update">Update</a>
 </div>
 <div class="box">
@@ -72,6 +73,23 @@
 
 <button class="btn-save" onclick="saveConfig()">Konfiguration speichern</button>
 
+<div class="box">
+    <h2>PC-Steuerung (Art-Net / sACN)</h2>
+    <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+        <input type="checkbox" id="netInput" onchange="saveNet()"> Steuerung per Art-Net / sACN erlauben
+    </label>
+    <div style="margin-top:10px;">
+        Universum: <input id="netUniverse" type="number" min="1" max="32768" value="1" style="width:90px;" onchange="saveNet()">
+    </div>
+    <p style="font-size:12px; color:#888;">
+        In der Lichtsoftware (z.&nbsp;B. QLC+) einen Art-Net- oder E1.31-Ausgang auf
+        <b id="netIp">diese IP</b> und das gleiche Universum einstellen. Solange Daten kommen,
+        steuert der PC die Lampen (nur Blackout wirkt noch); 3&nbsp;s nach dem letzten Paket
+        übernehmen wieder die Effekte.<br>
+        Universum 1 = Art-Net-Universum 0 bzw. sACN-Universum 1 (wie in QLC+ angezeigt).
+    </p>
+</div>
+
 <script>
 let config = { fixtures: [], fixtureTypes: {} };
 let hasErrors = false;
@@ -82,6 +100,9 @@ async function loadConfig() {
         config = await res.json();
         renderFixtures();
         renderTypes();
+        document.getElementById("netInput").checked = !!config.netInput;
+        document.getElementById("netUniverse").value = config.netUniverse || 1;
+        if (config.ip) document.getElementById("netIp").textContent = config.ip;
     } catch (e) { console.error("Ladefehler:", e); }
 }
 
@@ -197,6 +218,12 @@ function addType() {
 }
 
 function deleteType(name) { delete config.fixtureTypes[name]; renderTypes(); renderFixtures(); }
+
+function saveNet() {
+    const on = document.getElementById("netInput").checked ? 1 : 0;
+    const uni = parseInt(document.getElementById("netUniverse").value) || 1;
+    fetch(`/api/settings?netInput=${on}&netUniverse=${uni}`);
+}
 
 async function saveConfig() {
     const res = await fetch("/api/saveConfig", {

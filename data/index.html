@@ -16,6 +16,7 @@
     <a href="/wifi">WLAN</a>
     <a href="/dmxconfig">DMX</a>
     <a href="/mh" >Moving Head</a>
+    <a href="/monitor">Monitor</a>
     <a href="/update">Update</a>
 </div>
 
@@ -33,6 +34,7 @@
                     <span>BPM </span>
                     <span id="bpm" style=" color: #4fc3f7;">0</span>
                 </div>
+                <div id="netBadge" class="net-badge" style="display:none;">PC-Steuerung aktiv (Art-Net/sACN) – Effekte pausiert</div>
                 <div class="tap-row">
                     <button id="tapBtn" class="btn-tap">TAP</button>
                     <button id="lockBtn" class="btn-lock" onclick="toggleBpmLock()">BPM fest</button>
@@ -267,6 +269,9 @@ function showStatus(data) {
     }
     document.getElementById("bpm").textContent = Math.round(data.bpm);
     if (!isDragging) document.getElementById("masterVal").textContent = data.master;
+    if (data.netActive !== undefined) {
+        document.getElementById("netBadge").style.display = data.netActive ? "" : "none";
+    }
     if (data.bpmLocked !== undefined) {
         document.getElementById("lockBtn").classList.toggle("on", data.bpmLocked);
     }

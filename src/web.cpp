@@ -5,6 +5,8 @@
 #include <ESPAsyncWebServer.h>
 #include <WiFi.h>
 #include "ota.h"
+#include "dmx.h"
+#include "netinput.h"
 
 // Definition des Webservers
 AsyncWebServer server(80);  
@@ -68,6 +70,7 @@ String buildStatusJson(bool beat) {
     doc["master"] = state.master;
     doc["blackout"] = state.blackout;
     doc["bpmLocked"] = state.bpmLocked;
+    doc["netActive"] = netInputActive();
     doc["audioThreshold"] = state.audioThreshold; // Für den Slider-Sync
 
     String json;
@@ -190,6 +193,12 @@ void setupWeb() {
         if (req->hasParam("dropPreset"))          state.dropPreset = param("dropPreset");
         if ((v = param("movePattern")).length())  state.movePattern = constrain(v.toInt(), 0, MOVE_PATTERN_COUNT - 1);
         if ((v = param("moveSpread")).length())   state.moveSpread = v.toInt() != 0;
+
+        bool netChanged = false;
+        if ((v = param("netInput")).length())    { state.netInput = v.toInt() != 0; netChanged = true; }
+        if ((v = param("netUniverse")).length()) { state.netUniverse = constrain(v.toInt(), 1, 32768); netChanged = true; }
+        if (netChanged) setupNetInput();
+
         markConfigDirty();
         req->send(200, "text/plain", "OK");
     });
@@ -514,6 +523,9 @@ void setupWeb() {
         doc["moveSpread"]   = state.moveSpread;
         doc["autoShow"]     = state.autoShow;
         doc["showBeats"]    = state.showBeats;
+        doc["netInput"]     = state.netInput;
+        doc["netUniverse"]  = state.netUniverse;
+        doc["ip"]           = WiFi.isConnected() ? WiFi.localIP().toString() : WiFi.softAPIP().toString();
         String json;
         serializeJson(doc, json);
         req->send(200, "application/json", json);
@@ -647,11 +659,63 @@ void setupWeb() {
         scheduleRestart(1500);
     });
 
+    // API: Aktuell gesendete DMX-Werte (binär, 1 Byte pro Kanal) für den DMX-Monitor
+    server.on("/api/dmx", HTTP_GET, [](AsyncWebServerRequest *req){
+        static uint8_t buf[512];
+        int n;
+        {
+            StateLock lock;
+            n = getDMXOutput(buf, sizeof(buf));
+        }
+        AsyncWebServerResponse *res = req->beginResponse(200, "application/octet-stream", buf, n);
+        res->addHeader("Cache-Control", "no-store");
+        req->send(res);
+    });
+
+    // API: Backup herunterladen (ohne WLAN-Passwort; Login wie bei /update)
+    server.on("/api/backup", HTTP_GET, [](AsyncWebServerRequest *req){
+        if (!req->authenticate(OTA_USER, OTA_PASSWORD)) return req->requestAuthentication();
+        String json;
+        {
+            StateLock lock;
+            json = exportConfigJson();
+        }
+        AsyncWebServerResponse *res = req->beginResponse(200, "application/json", json);
+        res->addHeader("Content-Disposition", "attachment; filename=\"dmx-backup.json\"");
+        req->send(res);
+    });
+
+    // API: Backup wiederherstellen → Neustart
+    server.on("/api/restore", HTTP_POST,
+        [](AsyncWebServerRequest *req){
+            // Ohne Login wurde der Body ignoriert → Anmeldung anfordern
+            if (!req->authenticate(OTA_USER, OTA_PASSWORD)) req->requestAuthentication();
+        }, NULL,
+        [](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total){
+            if (!req->authenticate(OTA_USER, OTA_PASSWORD)) return;
+            const char *body = collectBody(req, data, len, index, total);
+            if (!body) return;
+
+            String error;
+            bool ok;
+            {
+                StateLock lock;
+                ok = importConfigJson(body, total, error);
+            }
+            if (!ok) {
+                req->send(400, "text/plain", error);
+                return;
+            }
+            req->send(200, "text/plain", "OK");
+            scheduleRestart(1500);
+        });
+
     // Navigation & Default Pages
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *req){ req->send(LittleFS, "/index.html", "text/html"); });
     server.on("/wifi", HTTP_GET, [](AsyncWebServerRequest *req){ req->send(LittleFS, "/wifi.html", "text/html"); });
     server.on("/dmxconfig", HTTP_GET, [](AsyncWebServerRequest *req){ req->send(LittleFS, "/dmxconfig.html", "text/html"); });
     server.on("/mh", HTTP_GET, [](AsyncWebServerRequest *req){ req->send(LittleFS, "/moving_head.html", "text/html"); });
+    server.on("/monitor", HTTP_GET, [](AsyncWebServerRequest *req){ req->send(LittleFS, "/monitor.html", "text/html"); });
 
     setupOTA(); // Update-Seite /update + ArduinoOTA
 

@@ -152,9 +152,71 @@ void updateDMXChannelCount() {
 // ----------------------------------------------------
 // Config speichern (JSON im NVS)
 // ----------------------------------------------------
+static void buildConfigDoc(JsonDocument &doc, bool includeWifi);
+static bool writeConfigToNVS(const String &json);
+
 void saveConfig() {
     JsonDocument doc;
+    buildConfigDoc(doc, true);
 
+    String json;
+    serializeJson(doc, json);
+    if (writeConfigToNVS(json)) Serial.printf("Config gespeichert (%u Bytes)\n", (unsigned)json.length());
+}
+
+static bool writeConfigToNVS(const String &json) {
+    Preferences prefs;
+    if (!prefs.begin(NVS_NAMESPACE, false)) {
+        Serial.println("Fehler: NVS konnte nicht geöffnet werden");
+        return false;
+    }
+    size_t written = prefs.putBytes(NVS_CONFIG_KEY, json.c_str(), json.length());
+    prefs.end();
+    if (written != json.length()) {
+        Serial.println("Fehler: Config konnte nicht gespeichert werden");
+        return false;
+    }
+    return true;
+}
+
+// ----------------------------------------------------
+// Backup / Wiederherstellung
+// ----------------------------------------------------
+String exportConfigJson() {
+    JsonDocument doc;
+    buildConfigDoc(doc, false); // WLAN-Passwort gehört nicht in eine Datei, die herumliegt
+    String json;
+    serializeJsonPretty(doc, json);
+    return json;
+}
+
+bool importConfigJson(const char *json, size_t len, String &error) {
+    JsonDocument doc;
+    if (deserializeJson(doc, json, len)) {
+        error = "Datei ist kein gültiges JSON";
+        return false;
+    }
+    if (!doc["fixtures"].is<JsonArray>() || !doc["fixtureTypes"].is<JsonObject>()) {
+        error = "Datei ist kein Backup dieses Controllers";
+        return false;
+    }
+
+    // WLAN-Daten des Geräts behalten (sind im Backup nicht enthalten)
+    doc["wifi_ssid"] = state.wifi_ssid;
+    doc["wifi_pass"] = state.wifi_pass;
+
+    String out;
+    serializeJson(doc, out);
+    if (!writeConfigToNVS(out)) {
+        error = "Speichern fehlgeschlagen";
+        return false;
+    }
+    state.otaActive = true; // Auto-Save sperren, sonst überschreibt der alte Stand das Backup
+    Serial.println("Backup wiederhergestellt, Neustart folgt");
+    return true;
+}
+
+static void buildConfigDoc(JsonDocument &doc, bool includeWifi) {
     // Fixtures speichern inkl. MH-Grenzen
     JsonArray arr = doc["fixtures"].to<JsonArray>();
     for (auto &fx : state.fixtures) {
@@ -178,8 +240,10 @@ void saveConfig() {
     }
 
     doc["master"]    = state.master;
-    doc["wifi_ssid"] = state.wifi_ssid;
-    doc["wifi_pass"] = state.wifi_pass;
+    if (includeWifi) {
+        doc["wifi_ssid"] = state.wifi_ssid;
+        doc["wifi_pass"] = state.wifi_pass;
+    }
     
     // NEU: Audio Threshold speichern
     doc["audioThreshold"] = state.audioThreshold;
@@ -194,6 +258,8 @@ void saveConfig() {
     doc["moveSpread"]   = state.moveSpread;
     doc["autoShow"]     = state.autoShow;
     doc["showBeats"]    = state.showBeats;
+    doc["netInput"]     = state.netInput;
+    doc["netUniverse"]  = state.netUniverse;
 
     // Presets
     JsonArray presets = doc["presets"].to<JsonArray>();
@@ -212,20 +278,6 @@ void saveConfig() {
     doc["colorR"]     = state.colorR;
     doc["colorG"]     = state.colorG;
     doc["colorB"]     = state.colorB;
-
-    String json;
-    serializeJson(doc, json);
-
-    Preferences prefs;
-    if (!prefs.begin(NVS_NAMESPACE, false)) {
-        Serial.println("Fehler: NVS konnte nicht geöffnet werden");
-        return;
-    }
-    size_t written = prefs.putBytes(NVS_CONFIG_KEY, json.c_str(), json.length());
-    prefs.end();
-
-    if (written == json.length()) Serial.printf("Config gespeichert (%u Bytes)\n", (unsigned)written);
-    else Serial.println("Fehler: Config konnte nicht gespeichert werden");
 }
 
 // ----------------------------------------------------
@@ -354,6 +406,8 @@ void loadConfig() {
     state.moveSpread     = doc["moveSpread"]     | true;
     state.autoShow       = doc["autoShow"]       | false;
     state.showBeats      = constrain((int)(doc["showBeats"] | 32), 4, 256);
+    state.netInput       = doc["netInput"]       | false;
+    state.netUniverse    = constrain((int)(doc["netUniverse"] | 1), 1, 32768);
     state.currentEffect  = doc["effect"]         | "static";
     state.timerSpeed     = constrain((int)(doc["timerSpeed"] | 500), TIMER_SPEED_MIN, TIMER_SPEED_MAX);
     state.colorR         = doc["colorR"]         | 255;
