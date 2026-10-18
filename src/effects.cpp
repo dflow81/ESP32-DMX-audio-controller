@@ -78,11 +78,25 @@ static double stepPos() {
 // Aktueller Schritt (für Chase, Bounce …) und Fortschritt innerhalb des Schritts (0…1)
 static long   stepIndex() { return (long)stepPos(); }
 
+// Effekt-Parameter: Breite (leuchtende Lampen) und Intensität (k = 1.0 bei 50 %)
+static int   fxWidth() { return constrain((int)state.fxWidth, 1, 8); }
+static float fxK()     { return state.fxIntensity / 50.0f; }
+
+// Lampe k liegt im "Fenster" der Breite fxWidth() ab Position pos (mit Umlauf)
+static bool inWindow(int k, int pos) {
+    int n = fxCount();
+    int d = ((k - pos) % n + n) % n;
+    return d < fxWidth();
+}
+
+// Für die Moving Heads: aktueller Effekt-Schritt (Takt-Raster)
+long effectStepIndex() { return stepIndex(); }
+
 // Auslöser für Farbwechsel der Disco-Effekte:
 // "Im Takt" an → bei jedem neuen Effekt-Schritt (½ / 1 / 2 Beats, wie eingestellt),
 // sonst wie bisher bei jedem erkannten Beat. Merkt sich den Schritt je Effekt und Slot.
 static bool colorChangeDue(int effectId) {
-    static long lastStep[2][GROUP_COUNT + 1];
+    static long lastStep[3][GROUP_COUNT + 1];   // 0 = Disco, 1 = Disco2, 2 = Pump
     static bool init = false;
     if (!init) { for (auto &row : lastStep) for (long &v : row) v = -1; init = true; }
 
@@ -142,7 +156,7 @@ void effectRainbowWave() {
     float t = getT();
 
     for (int i = 0; i < fxCount(); i++) {
-        float p = t + i * 0.3f;
+        float p = t + i * 0.3f * fxK();
 
         uint8_t r = (sin(p) * 127) + 128;
         uint8_t g = (sin(p + 2.09f) * 127) + 128;
@@ -173,8 +187,8 @@ void effectChase() {
     runnerColor(step / fxCount(), r, g, b);
 
     for (int i = 0; i < fxCount(); i++) {
-        if (i == pos) fxColor(i, r, g, b, 255);
-        else          fxColor(i, 0, 0, 0, 255);
+        if (inWindow(i, pos)) fxColor(i, r, g, b, 255);
+        else                  fxColor(i, 0, 0, 0, 255);
     }
 }
 
@@ -187,8 +201,8 @@ void effectBounce() {
     runnerColor(stepIndex() / max(1, 2 * (fxCount() - 1)), r, g, b);
 
     for (int i = 0; i < fxCount(); i++) {
-        if (i == pos) fxColor(i, r, g, b, 255);
-        else          fxColor(i, 0, 0, 0, 255);
+        if (inWindow(i, pos)) fxColor(i, r, g, b, 255);
+        else                  fxColor(i, 0, 0, 0, 255);
     }
 }
 
@@ -199,7 +213,7 @@ void effectDualWave() {
     float t = getT();
 
     for (int i = 0; i < fxCount(); i++) {
-        float v = sin(t + i * 0.5f);
+        float v = sin(t + i * 0.5f * fxK());
 
         uint8_t r = (v + 1) * 127;
         uint8_t g = (1 - v) * 127;
@@ -240,7 +254,7 @@ void effectSparkle() {
     for (int i = 0; i < fxCount(); i++) {
         uint8_t &s = sparkleBuf[fxGlobal(i)];
 
-        if (random(0, 100) < 3)
+        if (random(0, 1000) < 30 * fxK())     // Dichte (3 % pro Bild bei 50)
             s = 255;
 
         s = s > 5 ? s - 5 : 0;
@@ -253,7 +267,7 @@ void effectSparkle() {
 // STROBE
 // --------------------------------------------------
 void effectStrobe() {
-    uint8_t v = (stepPhase() < 0.25) ? 255 : 0;
+    uint8_t v = (stepPhase() < constrain(0.25f * fxK(), 0.02f, 0.9f)) ? 255 : 0;  // Blitzlänge
 
     for (int i = 0; i < fxCount(); i++) {
         fxColor(i, v, v, v, 255);
@@ -265,7 +279,8 @@ void effectStrobe() {
 // --------------------------------------------------
 void effectFire() {
     for (int i = 0; i < fxCount(); i++) {
-        uint8_t heat = random(150, 255);
+        int low = constrain((int)(255 - 105 * fxK()), 0, 254);   // Flackerstärke
+        uint8_t heat = random(low, 255);
 
         uint8_t r = heat;
         uint8_t g = heat * 0.4;
@@ -280,7 +295,8 @@ void effectFire() {
 // --------------------------------------------------
 void effectCandle() {
     for (int i = 0; i < fxCount(); i++) {
-        uint8_t base = 180 + random(-20, 20);
+        int f = 20 * fxK();                                      // Flackerstärke
+        uint8_t base = constrain(180 + (int)random(-f, f + 1), 0, 255);
         fxColor(i, base, base * 0.6, 0, 255);
     }
 }
@@ -292,7 +308,7 @@ void effectAurora() {
     float t = getT();
 
     for (int i = 0; i < fxCount(); i++) {
-        float p = sin(t + i * 0.4f);
+        float p = sin(t + i * 0.4f * fxK());
 
         uint8_t g = (p + 1) * 127;
         uint8_t b = 200;
@@ -308,7 +324,7 @@ void effectOcean() {
     float t = getT();
 
     for (int i = 0; i < fxCount(); i++) {
-        float p = sin(t + i * 0.3f);
+        float p = sin(t + i * 0.3f * fxK());
 
         uint8_t b = (p + 1) * 127;
         uint8_t g = b * 0.5;
@@ -336,7 +352,7 @@ void effectSunset() {
 // FULL STROBE
 // --------------------------------------------------
 void effectFullStrobe() {
-    uint8_t v = (stepPhase() < 0.2) ? 255 : 0;
+    uint8_t v = (stepPhase() < constrain(0.2f * fxK(), 0.02f, 0.9f)) ? 255 : 0;   // Blitzlänge
 
     for (int i = 0; i < fxCount(); i++) {
         fxColor(i, v, v, v, 255);
@@ -348,7 +364,7 @@ void effectFullStrobe() {
 // --------------------------------------------------
 void effectRandomStrobe() {
     for (int i = 0; i < fxCount(); i++) {
-        uint8_t v = (random(0, 100) < 10) ? 255 : 0;
+        uint8_t v = (random(0, 1000) < 100 * fxK()) ? 255 : 0;   // Dichte
         fxColor(i, v, v, v, 255);
     }
 }
@@ -360,7 +376,7 @@ void effectDimmerWave() {
     float t = getT();
 
     for (int i = 0; i < fxCount(); i++) {
-        uint8_t v = (sin(t + i * 0.4f) * 127) + 128;
+        uint8_t v = (sin(t + i * 0.4f * fxK()) * 127) + 128;
         fxColor(i, v, v, v, 255);
     }
 }
@@ -372,7 +388,7 @@ void effectDimmerChase() {
     int pos = stepIndex() % fxCount();
 
     for (int i = 0; i < fxCount(); i++) {
-        uint8_t v = (i == pos) ? 255 : 0;
+        uint8_t v = inWindow(i, pos) ? 255 : 0;
         fxColor(i, v, v, v, 255);
     }
 }
@@ -384,7 +400,7 @@ void effectDimmerBounce() {
     int pos = bouncePos();
 
     for (int i = 0; i < fxCount(); i++) {
-        uint8_t v = (i == pos) ? 255 : 0;
+        uint8_t v = inWindow(i, pos) ? 255 : 0;
         fxColor(i, v, v, v, 255);
     }
 }
@@ -495,6 +511,106 @@ void effectLightOrgan() {
 
 
 // --------------------------------------------------
+// Zeitschritt seit dem letzten Aufruf (je Effekt und Slot) für weiches Abklingen
+// --------------------------------------------------
+static float frameDt(unsigned long &last) {
+    unsigned long now = millis();
+    float dt = last ? (now - last) / 1000.0f : 0.02f;
+    last = now;
+    return constrain(dt, 0.0f, 0.2f);
+}
+
+// Grundfarbe für die Audio-Effekte: Kontextfarbe bzw. Palette (pro Auslöser weiter)
+static void audioColor(int &palIdx, uint8_t &r, uint8_t &g, uint8_t &b) {
+    r = ctx.r; g = ctx.g; b = ctx.b;
+    if (state.palette.on) {
+        int n = constrain((int)state.palette.size, 2, PALETTE_MAX);
+        const uint8_t *c = state.palette.c[((palIdx % n) + n) % n];
+        r = c[0]; g = c[1]; b = c[2];
+    }
+}
+
+// --------------------------------------------------
+// PUMP: alle Lampen leuchten auf jedem Kick (bzw. Takt-Schritt) hell auf und klingen ab
+// Intensität = wie lange das Nachleuchten dauert
+// --------------------------------------------------
+void effectPump() {
+    static float level[GROUP_COUNT + 1];
+    static unsigned long last[GROUP_COUNT + 1];
+    static int palIdx[GROUP_COUNT + 1];
+    int s = ctx.slot;
+
+    float dt = frameDt(last[s]);
+    if (colorChangeDue(2)) { level[s] = 1.0f; palIdx[s]++; }
+    float tau = 0.08f + 0.25f * fxK();          // Abklingzeit in s (~0,33 s bei 50)
+    level[s] *= expf(-dt / tau);
+
+    uint8_t r, g, b;
+    audioColor(palIdx[s], r, g, b);
+    float v = level[s];
+    for (int i = 0; i < fxCount(); i++) fxColor(i, r * v, g * v, b * v, 255);
+}
+
+// --------------------------------------------------
+// SNARE-BLITZ: Grundfarbe gedimmt, auf jeder Snare ein weißer Blitz
+// Intensität = Helligkeit der Grundfarbe zwischen den Blitzen
+// --------------------------------------------------
+void effectSnareFlash() {
+    static uint32_t lastSnare[GROUP_COUNT + 1];
+    static float flash[GROUP_COUNT + 1];
+    static unsigned long last[GROUP_COUNT + 1];
+    static int palIdx[GROUP_COUNT + 1];
+    int s = ctx.slot;
+
+    float dt = frameDt(last[s]);
+    uint32_t sc = state.snareCount;
+    if (sc != lastSnare[s]) { lastSnare[s] = sc; flash[s] = 1.0f; }
+    flash[s] *= expf(-dt / 0.12f);
+
+    uint8_t r, g, b;
+    audioColor(palIdx[s], r, g, b);
+    float base = constrain(0.25f * fxK(), 0.0f, 0.6f);
+    float f = flash[s];
+    for (int i = 0; i < fxCount(); i++) {
+        fxColor(i, r * base + (255 - r * base) * f,
+                   g * base + (255 - g * base) * f,
+                   b * base + (255 - b * base) * f, 255);
+    }
+}
+
+// --------------------------------------------------
+// BASS-WELLE: die Bass-Lautstärke läuft als Welle von der ersten zur letzten Lampe
+// Intensität = wie schnell die Welle wandert (höher = langsamer, mehr Abstand)
+// --------------------------------------------------
+void effectBassWave() {
+    static float hist[128];
+    static int head = 0;
+    static unsigned long lastPush = 0;
+    static float smooth = 0;
+    static int palIdx = 0;
+
+    // Einmal pro ~20 ms einen neuen Bass-Wert aufnehmen (gilt für alle Slots)
+    unsigned long now = millis();
+    if (now - lastPush >= 20) {
+        lastPush = now;
+        float bass = constrain(state.kickEnergy / max(1.0, state.refKick), 0.0, 1.0);
+        smooth = max(bass, smooth * 0.85f);   // schnell hoch, langsam runter
+        head = (head + 1) % 128;
+        hist[head] = smooth;
+    }
+
+    int delay = constrain((int)(1 + 2 * fxK()), 1, 8);   // Bilder Verzögerung pro Lampe
+    for (int i = 0; i < fxCount(); i++) {
+        int idx = ((head - i * delay) % 128 + 128) % 128;
+        float v = hist[idx];
+        uint8_t r, g, b;
+        if (state.palette.on) paletteAt((float)i * state.palette.size / max(1, fxCount()), r, g, b);
+        else audioColor(palIdx, r, g, b);
+        fxColor(i, r * v, g * v, b * v, 255);
+    }
+}
+
+// --------------------------------------------------
 // DROP-REAKTION (überschreibt den Effekt für DROP_HOLD_MS)
 // --------------------------------------------------
 void effectDropReaction(uint8_t action, unsigned long elapsed) {
@@ -582,4 +698,7 @@ static void runEffectNamed(const String& name) {
     else if (name == "disco") effectDisco();
     else if (name == "disco2") effectDisco2();
     else if (name == "lightorgan" || name == "retro") effectLightOrgan(); // "retro" = alter Name
+    else if (name == "pump") effectPump();
+    else if (name == "snareflash") effectSnareFlash();
+    else if (name == "basswave") effectBassWave();
 }

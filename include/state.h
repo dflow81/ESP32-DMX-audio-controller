@@ -94,6 +94,19 @@ struct Preset {
     bool          hasGroups = false;
     GroupSettings groups[GROUP_COUNT];
     Palette       palette;
+
+    // Übergangszeit beim Aufrufen (-1 = globale Einstellung) und Effekt-Parameter
+    int     fadeMs = -1;
+    uint8_t fxWidth = 1;
+    uint8_t fxIntensity = 50;
+};
+
+// Gespeicherte Moving-Head-Position (pro Head Pan/Tilt, zugeordnet über den Namen)
+#define MAX_POSITIONS 8
+struct HeadPos { String fixture; uint8_t pan; uint8_t tilt; };
+struct MhPosition {
+    String name;
+    std::vector<HeadPos> heads;
 };
 #define MAX_PRESETS      16
 #define PRESET_NAME_MAX  24
@@ -169,6 +182,37 @@ struct ControllerState {
     uint8_t movePattern = MOVE_CIRCLE;
     bool    moveSpread = true;  // Heads versetzt (Welle) statt synchron
 
+    // Übergänge und Effekt-Parameter
+    int     fadeMs = 600;               // Übergangszeit bei Effekt-/Farb-/Preset-Wechsel (0 = hart)
+    volatile int nextFadeMs = -1;       // einmalig für den nächsten Übergang (Preset), -1 = fadeMs
+    uint8_t fxWidth = 1;                // Breite: leuchtende Lampen bei Chase/Bounce (1…8)
+    uint8_t fxIntensity = 50;           // Intensität 0…100 (Flackern, Dichte, Wellenabstand …)
+
+    // Helligkeit folgt der Lautstärke
+    bool    levelDim = false;
+    uint8_t levelDimDepth = 50;         // wie stark (0…100 %)
+
+    // Moving-Head-Positionen
+    std::vector<MhPosition> positions;
+
+    // Zeitplan (Uhrzeit per NTP aus dem Internet)
+    bool    scheduleOn = false;
+    String  scheduleStart = "18:00";    // ab hier Licht an
+    String  scheduleEnd = "02:00";      // ab hier Licht aus (darf über Mitternacht gehen)
+    String  schedulePreset = "";        // beim Einschalten aufrufen (leer = keins)
+    volatile bool scheduleDark = false;     // gerade außerhalb der Zeit → dunkel
+    volatile bool scheduleOverride = false; // per UI vorzeitig eingeschaltet (bis zum nächsten Wechsel)
+    volatile bool timeValid = false;        // Uhrzeit vom NTP-Server erhalten
+
+    // Display-Schutz
+    int     displayOffMin = 15;         // Display aus nach X Min ohne Musik/Bedienung (0 = nie)
+    volatile unsigned long lastUserMs = 0;  // letzte Bedienung (Web oder Taster)
+
+    // Für "nächstes Preset" (Taster)
+    volatile int lastPresetIndex = -1;
+    // Gerade aktives Preset (für die Anzeige); -1, sobald Effekt/Farbe von Hand geändert werden
+    volatile int activePreset = -1;
+
     // Presets + Auto-Show
     std::vector<Preset> presets;
     bool autoShow = false;      // Presets automatisch durchschalten
@@ -213,6 +257,7 @@ struct ControllerState {
 
     // Kicks direkt aus der Musik (unabhängig von Tap-Tempo), für Standby
     volatile uint32_t audioKickCount = 0;
+    volatile uint32_t snareCount = 0;       // erkannte Snares (für den Snare-Blitz)
     volatile unsigned long lastAudioKickMs = 0;
 
     // Netzwerk-Eingang: Steuerung durch PC-Software per Art-Net / sACN
@@ -282,6 +327,9 @@ void handleAutoSave();
 
 // Startet den ESP nach delayMs neu (ausgeführt in loop(), damit HTTP-Antworten noch rausgehen)
 void scheduleRestart(unsigned long delayMs);
+
+// Tap-Tempo: einen Tap registrieren (Web-UI oder Taster), gibt die BPM zurück
+int registerTap();
 
 // FixtureDefinition <-> JSON (gemeinsam für Config und Web-API)
 void fixtureDefToJson(JsonObject t, const FixtureDefinition &d);

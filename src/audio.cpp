@@ -334,6 +334,7 @@ void taskAudio(void *pv) {
         double gH = state.calibrated ? state.gateHihat * gateScale : state.audioThreshold * 0.3;
         bool isKick  = kickDet.detect(kRaw, 1.25, 170, gK); 
         bool isSnare = snareDet.detect(sRaw, 1.3, 140, gS);
+        if (isSnare) state.snareCount++;   // für den Snare-Blitz
         bool isHihat = hihatDet.detect(hRaw, 1.5, 70, gH);
 
         if (isKick) {

@@ -32,6 +32,12 @@ void effectDimmerBounce();
 void effectDisco();
 void effectDisco2();
 void effectLightOrgan();   // Lichtorgel (früher "retro")
+void effectPump();         // Kick → alle hell, klingt ab
+void effectSnareFlash();   // Snare → weißer Blitz
+void effectBassWave();     // Bass läuft als Welle über die Lampen
+
+// Aktueller Effekt-Schritt (Takt-Raster), z. B. für die Moving Heads
+long effectStepIndex();
 
 // Manueller Strobe (Knopf in der Web-UI), überschreibt den laufenden Effekt
 void effectManualStrobe();

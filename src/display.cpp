@@ -102,6 +102,7 @@ static void drawDisplay() {
         {"PC",    net},
         {"BLACK", state.blackout},
         {"STBY",  state.standbyActive},
+        {"AUS",   state.scheduleDark && !state.scheduleOverride},   // Zeitplan
         {"NEBEL", state.fogChannel > 0 && ((long)(state.fogUntil - now) > 0 || (long)(state.manualFogUntil - now) > 0)},
     };
     int x = 0;
@@ -125,10 +126,34 @@ static void drawDisplay() {
     oled.display();
 }
 
+// Einbrennschutz: ohne Musik und Bedienung nach der halben Zeit dimmen, dann ausschalten.
+// Gibt false zurück, wenn das Display aus ist (dann nicht zeichnen).
+static bool updateDisplayPower() {
+    static int mode = 0;   // 0 = normal, 1 = gedimmt, 2 = aus
+    unsigned long now = millis();
+    unsigned long active = max((unsigned long)state.lastAudioKickMs, (unsigned long)state.lastUserMs);
+    unsigned long idle = now - active;
+    unsigned long offMs = (unsigned long)state.displayOffMin * 60000UL;
+
+    int want = 0;
+    if (offMs > 0 && idle >= offMs) want = 2;
+    else if (offMs > 0 && idle >= offMs / 2) want = 1;
+    if (want == mode) return mode != 2;
+
+    if (want == 2) {
+        oled.ssd1306_command(SSD1306_DISPLAYOFF);
+    } else {
+        if (mode == 2) oled.ssd1306_command(SSD1306_DISPLAYON);
+        oled.dim(want == 1);
+    }
+    mode = want;
+    return mode != 2;
+}
+
 static void displayTask(void *param) {
     for (;;) {
         uint32_t t0 = micros();
-        drawDisplay();
+        if (updateDisplayPower()) drawDisplay();
         loadStats.displayUs = micros() - t0;
         vTaskDelay(pdMS_TO_TICKS(DISPLAY_REFRESH_MS));
     }

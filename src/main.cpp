@@ -9,6 +9,8 @@
 #include "ota.h"
 #include "netinput.h"
 #include "display.h"
+#include "buttons.h"
+#include "schedule.h"
 
 
 // Geplanter Neustart (z. B. nach dem Speichern der WLAN-Daten)
@@ -176,7 +178,8 @@ static void handleFog(bool newDrop) {
 }
 
 static bool isAudioEffect(const String &fx) {
-    return fx == "disco" || fx == "disco2" || fx == "lightorgan" || fx == "retro";
+    return fx == "disco" || fx == "disco2" || fx == "lightorgan" || fx == "retro" ||
+           fx == "pump" || fx == "snareflash" || fx == "basswave";
 }
 
 // Ein Bild der normalen Effekt-Steuerung berechnen und senden.
@@ -276,9 +279,16 @@ void effectTask(void *param) {
             // --- PC-STEUERUNG (Art-Net / sACN) ---
             // Kommen Netzwerk-Daten, werden sie 1:1 ausgegeben; Effekte pausieren
             if (netInputActive()) {
-                updateDMXFromNetwork(netFrame, copyNetDmx(netFrame));
+                // Strobe-Knopf hat auch bei PC-Steuerung Vorrang
+                if ((long)(state.manualStrobeUntil - millis()) > 0) {
+                    effectManualStrobe();
+                    updateDMX();
+                    delayTime = 10;
+                } else {
+                    updateDMXFromNetwork(netFrame, copyNetDmx(netFrame));
+                    delayTime = 20;
+                }
                 wasNet = true;
-                delayTime = 20;
             } else {
                 if (wasNet) {
                     wasNet = false;
@@ -305,6 +315,8 @@ void setup() {
     setupWiFi(); 
     setupWeb(); 
     setupNetInput(); // Art-Net / sACN, falls eingeschaltet
+    setupSchedule(); // Uhrzeit per NTP für den Zeitplan
+    setupButtons();  // Taster / Fußschalter
 
     // Core 0: Audio (+ WLAN-Stack, Display)
     xTaskCreatePinnedToCore(taskAudio, "AudioTask", 10240, NULL, PRIO_AUDIO, &loadStats.audioTask, CORE_AUDIO);
@@ -318,9 +330,11 @@ void setup() {
 
 void loop() {
     // Effekte und Audio laufen in eigenen FreeRTOS-Tasks;
-    // die Loop (Core 1) kümmert sich um WLAN, OTA-Updates, WebSocket und geplante Neustarts
+    // die Loop (Core 1) kümmert sich um WLAN, OTA-Updates, Taster, Zeitplan, WebSocket und geplante Neustarts
     handleWiFi();
     handleOTA();
+    handleButtons();
+    handleSchedule();
     handleLiveStatus();
 
     if (restartAt && (long)(millis() - restartAt) >= 0) {

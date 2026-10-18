@@ -31,6 +31,14 @@
         .extra-row input[type=range] { width: 100%; }
         .extra-val { text-align: right; color: var(--primary); }
 
+        .pos-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .pos-item { display: flex; }
+        .pos-item .pos-btn { flex: 1; background: #333; text-align: left; border-radius: 8px 0 0 8px; }
+        .pos-item .pos-del { background: #2a2a2a; color: #888; border-radius: 0 8px 8px 0; padding: 14px 10px; }
+        .pos-save { display: flex; gap: 8px; margin-top: 10px; }
+        .pos-save input { flex: 1; min-width: 0; padding: 10px; background: #333; color: #fff; border: 1px solid #444; border-radius: 8px; }
+        .hint { font-size: 11px; color: #777; margin-top: 6px; }
+
         #status { font-size: 11px; color: #666; margin-top: 15px; text-align: center; min-height: 1.2em; }
         .led { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #444; margin-right: 5px; }
         .led.active { background: #00ff00; box-shadow: 0 0 5px #00ff00; }
@@ -77,6 +85,16 @@
             <option value="4">Zufällige Positionen</option>
         </select>
         <label class="opt"><input type="checkbox" id="moveSpread" onchange="saveMovement()" checked> Heads versetzt (Welle)</label>
+    </div>
+
+    <div class="section">
+        <div class="section-title">Positionen (alle Heads)</div>
+        <div id="positions" class="pos-grid"></div>
+        <div class="pos-save">
+            <input type="text" id="posName" maxlength="24" placeholder="Name, z. B. Bühne">
+            <button class="btn-save" onclick="savePosition()">Speichern</button>
+        </div>
+        <div class="hint">Speichert die aktuelle Position aller Moving Heads. Anfahren schaltet BPM Auto für diese Heads aus.</div>
     </div>
 
     <div class="section" id="extrasSection" style="display:none;">
@@ -245,7 +263,47 @@
         }
     });
 
-    window.onload = () => { loadList(); loadMovement(); };
+    // Positionen
+    function loadPositions() {
+        fetch('/api/positions').then(r => r.json()).then(list => {
+            const box = document.getElementById('positions');
+            box.innerHTML = "";
+            if (!list.length) {
+                box.innerHTML = "<div class='hint'>Noch keine Positionen gespeichert.</div>";
+                return;
+            }
+            list.forEach(p => {
+                const item = document.createElement('div');
+                item.className = "pos-item";
+                const btn = document.createElement('button');
+                btn.className = "pos-btn";
+                btn.textContent = p.name;
+                btn.onclick = () => fetch(`/api/loadPosition?id=${p.id}`).then(() => setStatus("Position: " + p.name));
+                const del = document.createElement('button');
+                del.className = "pos-del";
+                del.textContent = "✕";
+                del.onclick = () => {
+                    if (confirm(`Position "${p.name}" löschen?`)) fetch(`/api/deletePosition?id=${p.id}`).then(loadPositions);
+                };
+                item.append(btn, del);
+                box.appendChild(item);
+            });
+        });
+    }
+
+    function savePosition() {
+        const input = document.getElementById('posName');
+        const name = input.value.trim();
+        if (!name) return alert("Bitte einen Namen eingeben.");
+        fetch('/api/savePosition?name=' + encodeURIComponent(name)).then(async r => {
+            if (!r.ok) return alert(await r.text());
+            input.value = "";
+            setStatus("Position gespeichert");
+            loadPositions();
+        });
+    }
+
+    window.onload = () => { loadList(); loadMovement(); loadPositions(); };
 </script>
 
 </body>

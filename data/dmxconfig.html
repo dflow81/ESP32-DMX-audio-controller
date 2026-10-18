@@ -94,6 +94,51 @@
 </div>
 
 <div class="box">
+    <h2>Zeitplan</h2>
+    <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+        <input type="checkbox" id="scheduleOn" onchange="saveSchedule()"> Licht nur zu bestimmten Zeiten
+    </label>
+    <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin-top:10px;">
+        <label>an ab <input id="scheduleStart" type="time" value="18:00" onchange="saveSchedule()"></label>
+        <label>aus ab <input id="scheduleEnd" type="time" value="02:00" onchange="saveSchedule()"></label>
+        <label>beim Einschalten <select id="schedulePreset" onchange="saveSchedule()"></select></label>
+    </div>
+    <p style="font-size:12px; color:#888;">
+        Uhrzeit des Controllers: <b id="scheduleTime">–</b>. Die Zeit kommt aus dem Internet (WLAN nötig);
+        ohne Uhrzeit bleibt das Licht an. Außerhalb der Zeit ist alles dunkel – auf der Startseite lässt es sich
+        mit „Jetzt einschalten“ bis zum nächsten Wechsel überstimmen.
+    </p>
+</div>
+
+<div class="box">
+    <h2>Display</h2>
+    <label>Ausschalten nach
+        <select id="displayOffMin" onchange="saveDisplay()">
+            <option value="0">nie</option>
+            <option value="5">5 Min</option>
+            <option value="15">15 Min</option>
+            <option value="30">30 Min</option>
+            <option value="60">60 Min</option>
+        </select>
+        ohne Musik und Bedienung
+    </label>
+    <p style="font-size:12px; color:#888;">Schützt das OLED vor dem Einbrennen. Nach der halben Zeit wird es gedimmt; Musik, Bedienung oder ein Taster wecken es wieder.</p>
+</div>
+
+<div class="box">
+    <h2>Taster / Fußschalter</h2>
+    <table>
+        <tr><th>GPIO</th><th>Funktion</th></tr>
+        <tr><td>25</td><td>Strobe (halten)</td></tr>
+        <tr><td>26</td><td>Blackout an/aus</td></tr>
+        <tr><td>27</td><td>Nebel (halten)</td></tr>
+        <tr><td>14</td><td>Tap-Tempo</td></tr>
+        <tr><td>13</td><td>Nächstes Preset</td></tr>
+    </table>
+    <p style="font-size:12px; color:#888;">Jeden Taster zwischen GPIO und GND anschließen (keine Widerstände nötig). Die Belegung steht in <code>include/buttons.h</code>.</p>
+</div>
+
+<div class="box">
     <h2>PC-Steuerung (Art-Net / sACN)</h2>
     <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
         <input type="checkbox" id="netInput" onchange="saveNet()"> Steuerung per Art-Net / sACN erlauben
@@ -123,6 +168,13 @@ async function loadConfig() {
         document.getElementById("netInput").checked = !!config.netInput;
         document.getElementById("netUniverse").value = config.netUniverse || 1;
         if (config.ip) document.getElementById("netIp").textContent = config.ip;
+        const sch = config.schedule || {};
+        document.getElementById("scheduleOn").checked = !!sch.on;
+        document.getElementById("scheduleStart").value = sch.start || "18:00";
+        document.getElementById("scheduleEnd").value = sch.end || "02:00";
+        document.getElementById("scheduleTime").textContent = sch.time || "noch keine (kein Internet?)";
+        document.getElementById("displayOffMin").value = String(config.displayOffMin ?? 15);
+        loadSchedulePresets(sch.preset || "");
         const fog = config.fog || {};
         document.getElementById("fogChannel").value = fog.channel || 0;
         document.getElementById("fogLevel").value = fog.level ?? 255;
@@ -255,6 +307,26 @@ function deleteType(name) { delete config.fixtureTypes[name]; renderTypes(); ren
 function groupName(g) {
     const grp = (config.groups || [])[g - 1];
     return (grp && grp.name) ? grp.name : "Gruppe " + g;
+}
+
+function loadSchedulePresets(selected) {
+    fetch("/api/presets").then(r => r.json()).then(list => {
+        const sel = document.getElementById("schedulePreset");
+        sel.innerHTML = "";
+        sel.appendChild(new Option("– keins –", ""));
+        list.forEach(p => sel.appendChild(new Option(p.name, p.name)));
+        sel.value = selected;
+    });
+}
+
+function saveSchedule() {
+    const on = document.getElementById("scheduleOn").checked ? 1 : 0;
+    const v = id => encodeURIComponent(document.getElementById(id).value);
+    fetch(`/api/settings?scheduleOn=${on}&scheduleStart=${v("scheduleStart")}&scheduleEnd=${v("scheduleEnd")}&schedulePreset=${v("schedulePreset")}`);
+}
+
+function saveDisplay() {
+    fetch("/api/settings?displayOffMin=" + document.getElementById("displayOffMin").value);
 }
 
 function saveFog() {

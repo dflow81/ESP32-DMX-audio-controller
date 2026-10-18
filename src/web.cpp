@@ -8,6 +8,7 @@
 #include "dmx.h"
 #include "netinput.h"
 #include "audio.h"
+#include "schedule.h"
 
 // Definition des Webservers
 AsyncWebServer server(80);  
@@ -24,6 +25,7 @@ void markConfigDirty() {
     lastChangeTime = millis();
     configDirty = true;
     state.userTouched = true; // Bedienung → Standby verlassen
+    state.lastUserMs = millis();
 }
 
 // Wird vom Effekt-Task aufgerufen (hält dabei den StateLock)
@@ -65,6 +67,13 @@ void hexToRGB(String hex, uint8_t &r, uint8_t &g, uint8_t &b) {
 
 String buildStatusJson(bool beat) {
     JsonDocument doc;
+    {
+        // Aktueller Effekt + Preset, damit alle Browser die Auswahl richtig anzeigen –
+        // auch wenn Auto-Show, Cue-Liste, Taster o. Ä. gewechselt haben
+        StateLock lock;
+        doc["effect"] = state.currentEffect;
+        doc["preset"] = state.activePreset;
+    }
     doc["level"]  = constrain(state.level / max(1.0, state.refLevel), 0.0, 1.0);
     doc["beat"]   = beat;
     doc["drop"]   = state.drop;
@@ -74,6 +83,7 @@ String buildStatusJson(bool beat) {
     doc["bpmLocked"] = state.bpmLocked;
     doc["netActive"] = netInputActive();
     doc["standby"]   = state.standbyActive;
+    doc["scheduleDark"] = state.scheduleDark && !state.scheduleOverride;
     doc["cueRunning"] = state.cueRunning;
     doc["cueIndex"]  = state.cueIndex;
     unsigned long now = millis();
@@ -153,22 +163,8 @@ void setupWeb() {
 
     // API: Tap-Tempo. Mehrmals im Takt tippen → BPM wird übernommen und festgehalten
     server.on("/api/tap", HTTP_GET, [](AsyncWebServerRequest *req){
-        static unsigned long taps[8];
-        static int tapCount = 0;
-        unsigned long now = millis();
-
-        // Längere Pause = neue Tap-Folge
-        if (tapCount > 0 && now - taps[tapCount - 1] > 2000) tapCount = 0;
-        if (tapCount == 8) { memmove(taps, taps + 1, 7 * sizeof(taps[0])); tapCount = 7; }
-        taps[tapCount++] = now;
-
-        if (tapCount >= 2) {
-            float avg = (taps[tapCount - 1] - taps[0]) / (float)(tapCount - 1);
-            state.bpm = constrain(60000.0f / avg, 40.0f, 220.0f);
-            state.bpmLocked = true;
-        }
-        if (state.bpmLocked) state.clockSyncMs = now; // Takt auf den letzten Tap ausrichten
-        req->send(200, "text/plain", String((int)roundf(state.bpm)));
+        state.lastUserMs = millis();
+        req->send(200, "text/plain", String(registerTap()));
     });
 
     // API: BPM festhalten an/aus (aus = wieder Erkennung aus der Musik)
@@ -232,6 +228,20 @@ void setupWeb() {
         // Cue-Liste
         if ((v = param("cueLoop")).length())        state.cueLoop = v.toInt() != 0;
 
+        // Übergänge, Effekt-Parameter, Lautstärke-Helligkeit
+        if ((v = param("fadeMs")).length())         state.fadeMs = constrain(v.toInt(), 0, 10000);
+        if ((v = param("fxWidth")).length())        state.fxWidth = constrain(v.toInt(), 1, 8);
+        if ((v = param("fxIntensity")).length())    state.fxIntensity = constrain(v.toInt(), 0, 100);
+        if ((v = param("levelDim")).length())       state.levelDim = v.toInt() != 0;
+        if ((v = param("levelDimDepth")).length())  state.levelDimDepth = constrain(v.toInt(), 0, 100);
+
+        // Zeitplan, Display
+        if ((v = param("scheduleOn")).length())     state.scheduleOn = v.toInt() != 0;
+        if ((v = param("scheduleStart")).length())  state.scheduleStart = v.substring(0, 5);
+        if ((v = param("scheduleEnd")).length())    state.scheduleEnd = v.substring(0, 5);
+        if (req->hasParam("schedulePreset"))        state.schedulePreset = param("schedulePreset");
+        if ((v = param("displayOffMin")).length())  state.displayOffMin = constrain(v.toInt(), 0, 240);
+
         bool netChanged = false;
         if ((v = param("netInput")).length())    { state.netInput = v.toInt() != 0; netChanged = true; }
         if ((v = param("netUniverse")).length()) { state.netUniverse = constrain(v.toInt(), 1, 32768); netChanged = true; }
@@ -288,6 +298,86 @@ void setupWeb() {
             state.manualFogUntil = on ? millis() + FOG_KEEPALIVE_MS : 0;
             req->send(200, "text/plain", "OK");
         } else { req->send(400, "text/plain", "Error"); }
+    });
+
+    // API: Zeitplan "aus" überstimmen (Licht jetzt an, bis zum nächsten Wechsel)
+    server.on("/api/scheduleOverride", HTTP_GET, [](AsyncWebServerRequest *req){
+        state.scheduleOverride = !req->hasParam("on") || req->getParam("on")->value().toInt() != 0;
+        req->send(200, "text/plain", "OK");
+    });
+
+    // --- Moving-Head-Positionen ---
+    server.on("/api/positions", HTTP_GET, [](AsyncWebServerRequest *req){
+        StateLock lock;
+        JsonDocument doc;
+        JsonArray arr = doc.to<JsonArray>();
+        for (size_t i = 0; i < state.positions.size(); i++) {
+            JsonObject o = arr.add<JsonObject>();
+            o["id"]    = i;
+            o["name"]  = state.positions[i].name;
+            o["heads"] = state.positions[i].heads.size();
+        }
+        String json;
+        serializeJson(doc, json);
+        req->send(200, "application/json", json);
+    });
+
+    // Aktuelle Pan/Tilt-Werte aller Moving Heads als Position speichern (gleicher Name = überschreiben)
+    server.on("/api/savePosition", HTTP_GET, [](AsyncWebServerRequest *req){
+        String name = req->hasParam("name") ? req->getParam("name")->value() : "";
+        name.trim();
+        if (name.isEmpty() || name.length() > PRESET_NAME_MAX) {
+            req->send(400, "text/plain", "Name fehlt oder ist zu lang");
+            return;
+        }
+        StateLock lock;
+        MhPosition pos;
+        pos.name = name;
+        for (auto &fx : state.fixtures) {
+            const FixtureDefinition *def = getFixtureDef(fx.type);
+            if (!def || def->offsetPan < 0) continue;
+            int base = fx.start - 1;
+            int p = base + def->offsetPan, t = base + def->offsetTilt;
+            pos.heads.push_back({fx.name,
+                                 (uint8_t)(p >= 0 && p < 512 ? state.dmx[p] : 128),
+                                 (uint8_t)(def->offsetTilt >= 0 && t < 512 ? state.dmx[t] : 128)});
+        }
+        if (pos.heads.empty()) {
+            req->send(400, "text/plain", "Keine Moving Heads angelegt");
+            return;
+        }
+        int idx = -1;
+        for (size_t i = 0; i < state.positions.size(); i++) if (state.positions[i].name == name) idx = i;
+        if (idx >= 0) state.positions[idx] = pos;
+        else if (state.positions.size() < MAX_POSITIONS) state.positions.push_back(pos);
+        else { req->send(409, "text/plain", "Maximal " + String(MAX_POSITIONS) + " Positionen"); return; }
+        markConfigDirty();
+        req->send(200, "text/plain", "OK");
+    });
+
+    // Position anfahren: alle gespeicherten Heads dorthin, BPM-Auto für sie aus
+    server.on("/api/loadPosition", HTTP_GET, [](AsyncWebServerRequest *req){
+        int id = req->hasParam("id") ? req->getParam("id")->value().toInt() : -1;
+        StateLock lock;
+        if (id < 0 || id >= (int)state.positions.size()) { req->send(400, "text/plain", "Error"); return; }
+        for (auto &h : state.positions[id].heads) {
+            for (size_t i = 0; i < state.fixtures.size(); i++) {
+                if (state.fixtures[i].name != h.fixture) continue;
+                state.fixtures[i].isAutoMoving = false;
+                setFixtureMovement(i, h.pan, h.tilt);
+            }
+        }
+        markConfigDirty();
+        req->send(200, "text/plain", "OK");
+    });
+
+    server.on("/api/deletePosition", HTTP_GET, [](AsyncWebServerRequest *req){
+        int id = req->hasParam("id") ? req->getParam("id")->value().toInt() : -1;
+        StateLock lock;
+        if (id < 0 || id >= (int)state.positions.size()) { req->send(400, "text/plain", "Error"); return; }
+        state.positions.erase(state.positions.begin() + id);
+        markConfigDirty();
+        req->send(200, "text/plain", "OK");
     });
 
     // --- Cue-Liste ---
@@ -428,6 +518,8 @@ void setupWeb() {
             return;
         }
         state.presets.erase(state.presets.begin() + id);
+        if (state.activePreset == id) state.activePreset = -1;
+        else if (state.activePreset > id) state.activePreset = state.activePreset - 1;
         markConfigDirty();
         req->send(200, "text/plain", "OK");
     });
@@ -600,6 +692,7 @@ void setupWeb() {
             StateLock lock;
             hexToRGB(req->getParam("hex")->value(), state.colorR, state.colorG, state.colorB);
             state.currentEffect = "static"; 
+            state.activePreset = -1;   // von Hand geändert
             state.fadeRequest = true;
             markConfigDirty();
         }
@@ -620,6 +713,7 @@ void setupWeb() {
             StateLock lock;
             if (state.currentEffect != name) state.fadeRequest = true;
             state.currentEffect = name;
+            state.activePreset = -1;   // von Hand geändert
             markConfigDirty();
         }
         req->send(200, "text/plain", "OK");
@@ -682,6 +776,18 @@ void setupWeb() {
         doc["standbyPreset"] = state.standbyPreset;
         doc["cueLoop"]       = state.cueLoop;
         doc["calibrated"]    = state.calibrated;
+        doc["fadeMs"]        = state.fadeMs;
+        doc["fxWidth"]       = state.fxWidth;
+        doc["fxIntensity"]   = state.fxIntensity;
+        doc["levelDim"]      = state.levelDim;
+        doc["levelDimDepth"] = state.levelDimDepth;
+        JsonObject sched = doc["schedule"].to<JsonObject>();
+        sched["on"]     = state.scheduleOn;
+        sched["start"]  = state.scheduleStart;
+        sched["end"]    = state.scheduleEnd;
+        sched["preset"] = state.schedulePreset;
+        sched["time"]   = currentTimeString();   // leer = noch keine Uhrzeit
+        doc["displayOffMin"] = state.displayOffMin;
         doc["ip"]           = WiFi.isConnected() ? WiFi.localIP().toString() : WiFi.softAPIP().toString();
         String json;
         serializeJson(doc, json);

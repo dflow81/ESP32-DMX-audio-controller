@@ -1,6 +1,7 @@
 #include <SparkFunDMX.h>
 #include "dmx.h"
 #include "state.h"
+#include "effects.h"
 #include <vector>
 
 extern ControllerState state;
@@ -171,9 +172,18 @@ void updateMovements() {
     // 1. Prüfung: Haben wir einen Takt?
     if (state.bpm < 30) return; 
 
-    // --- BEAT TRIGGER LOGIK (nur Kreis, wie bisher) ---
-    // Wenn ein Beat erkannt wurde, ändern wir die Parameter
-    if (state.beat) {
+    // --- BEAT TRIGGER LOGIK ---
+    // Auslöser: bei "Im Takt" jeder Effekt-Schritt (½ / 1 / 2 Beats), sonst jeder Beat
+    static long lastStep = -1;
+    bool trigger = state.beat;
+    if (state.beatSync) {
+        long step = effectStepIndex();
+        trigger = (step != lastStep);
+        lastStep = step;
+    }
+
+    // Kreis: Richtung umkehren + Phasensprung
+    if (trigger) {
         beatDirection *= -1.0f;          // Richtung umkehren (1.0 oder -1.0)
         beatOffset += random(10, 100) / 10.0f; // Zufälliger Phasensprung
     }
@@ -192,7 +202,7 @@ void updateMovements() {
         randTargetP.resize(n, 0.5f); randTargetT.resize(n, 0.5f);
         randP.resize(n, 0.5f);       randT.resize(n, 0.5f);
     }
-    if (state.movePattern == MOVE_RANDOM && state.beat) {
+    if (state.movePattern == MOVE_RANDOM && trigger) {
         float sharedP = random(0, 1001) / 1000.0f, sharedT = random(0, 1001) / 1000.0f;
         for (int i = 0; i < n; i++) {
             randTargetP[i] = state.moveSpread ? random(0, 1001) / 1000.0f : sharedP;
@@ -271,21 +281,36 @@ void updateDMX() {
     int total = constrain(max(state.numChannels, state.fogChannel), 1, 512);
 
     unsigned long now = millis();
+    static int fadeDuration = 600;
     if (state.fadeRequest) {
         state.fadeRequest = false;
+        // Preset kann eine eigene Übergangszeit mitbringen, sonst die globale
+        fadeDuration = state.nextFadeMs >= 0 ? state.nextFadeMs : state.fadeMs;
+        state.nextFadeMs = -1;
         memcpy(fadeFrom, lastOut, sizeof(fadeFrom));
         fadeStart = now;
-        fading = true;
+        fading = fadeDuration > 0;
     }
     float t = 1.0f;
     if (fading) {
-        t = (now - fadeStart) / (float)FADE_MS;
+        t = (now - fadeStart) / (float)fadeDuration;
         if (t >= 1.0f) { t = 1.0f; fading = false; }
     }
 
-    // Blackout: Helligkeit sofort auf 0 (der Strobe-Knopf hat Vorrang)
+    // Helligkeit folgt der Lautstärke: schnell heller, langsam dunkler
+    static float loud = 1.0f;
+    float lvlFactor = 1.0f;
+    if (state.levelDim) {
+        float lvl = constrain(state.level / max(1.0, state.refLevel) * 1.5, 0.0, 1.0);
+        loud += (lvl - loud) * (lvl > loud ? 0.5f : 0.05f);
+        float depth = state.levelDimDepth / 100.0f;
+        lvlFactor = 1.0f - depth + depth * loud;
+    }
+
+    // Blackout bzw. Zeitplan "aus": Helligkeit sofort auf 0 (der Strobe-Knopf hat Vorrang)
     bool strobing = (long)(state.manualStrobeUntil - now) > 0;
-    bool dark = state.blackout && !strobing;
+    bool scheduleDark = state.scheduleDark && !state.scheduleOverride;
+    bool dark = (state.blackout || scheduleDark) && !strobing;
 
     unsigned long nowFog = millis();
     bool fogOn = fogIdx >= 0 && ((long)(state.fogUntil - nowFog) > 0 || (long)(state.manualFogUntil - nowFog) > 0);
@@ -298,6 +323,7 @@ void updateDMX() {
         bool dimmable = isDimmableChannel(i);
         if (dimmable) {
             v = applyMaster(v);
+            if (state.levelDim) v = v * lvlFactor;
         }
 
         if (fading) v = fadeFrom[i] + (int)(((int)v - (int)fadeFrom[i]) * t);
@@ -316,11 +342,18 @@ void updateDMXFromNetwork(const uint8_t *data, int len) {
     int total = constrain(max(len, state.numChannels), 1, 512);
     cancelFade();
 
+    // Nebel-Knopf/-Automatik wirkt auch bei PC-Steuerung (überschreibt nur, solange aktiv)
+    unsigned long now = millis();
+    int fogIdx = state.fogChannel - 1;
+    bool fogOn = fogIdx >= 0 && ((long)(state.fogUntil - now) > 0 || (long)(state.manualFogUntil - now) > 0);
+    if (fogOn) total = max(total, (int)state.fogChannel);
+
     bool dark = state.blackout;
     for (int i = 0; i < total; i++) {
         uint8_t v = i < len ? data[i] : 0;
         lastOut[i] = v; // damit nach dem Art-Net-Betrieb sauber übergeblendet wird
         uint8_t out = (dark && isDimmableChannel(i)) ? 0 : v;
+        if (fogOn && i == fogIdx) out = state.fogLevel;
         sentOut[i] = out;
     }
     publishFrame(total);

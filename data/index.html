@@ -37,6 +37,8 @@
                 </div>
                 <div id="netBadge" class="net-badge" style="display:none;">PC-Steuerung aktiv (Art-Net/sACN) – Effekte pausiert</div>
                 <div id="standbyBadge" class="net-badge" style="display:none;">Standby – keine Musik erkannt</div>
+                <div id="scheduleBadge" class="net-badge" style="display:none;">Zeitplan: Licht ist gerade aus
+                    <button class="btn-small" onclick="scheduleOverride()">Jetzt einschalten</button></div>
                 <div class="tap-row">
                     <button id="tapBtn" class="btn-tap">TAP</button>
                     <button id="lockBtn" class="btn-lock" onclick="toggleBpmLock()">BPM fest</button>
@@ -44,6 +46,13 @@
             </div>
         </div>
     </div>
+
+    <!-- VIRTUELLE BÜHNE -->
+    <details class="card" id="stageCard" open>
+        <summary>Virtuelle Bühne</summary>
+        <div id="stage" class="stage"></div>
+        <div class="preset-hint">Zeigt live, was an die Lampen gesendet wird (Farbe, Helligkeit, bei Moving Heads die Position).</div>
+    </details>
 
     <!-- MASTER & AUDIO THRESHOLD -->
     <div class="row" style="display: flex; flex-wrap: wrap; gap: 10px;">
@@ -54,6 +63,15 @@
                        oninput="previewMaster(this.value)"
                        onchange="saveMaster(this.value)">
                 <div style="margin-top:10px;">Wert: <span id="masterVal" style="color:#4fc3f7">255</span></div>
+                <div class="opt-row">
+                    <label><input type="checkbox" id="levelDim" onchange="saveLevelDim()"> Helligkeit folgt Lautstärke</label>
+                    <select id="levelDimDepth" onchange="saveLevelDim()">
+                        <option value="25">leicht</option>
+                        <option value="50" selected>mittel</option>
+                        <option value="75">stark</option>
+                        <option value="100">voll</option>
+                    </select>
+                </div>
             </div>
        
             <div style="margin-top: 20px;">
@@ -109,6 +127,30 @@
                         <option value="0.5">2 Beats pro Schritt</option>
                     </select>
                 </div>
+            </div>
+
+            <div style="margin-top: 20px;">
+                <span> Übergang</span>
+                <input id="fadeMs" type="range" min="0" max="5000" step="100" value="600"
+                       oninput="document.getElementById('fadeVal').textContent = fmtFade(this.value)"
+                       onchange="saveFx()">
+                <div style="margin-top:10px;">Dauer: <span id="fadeVal" style="color:#4fc3f7">0,6 s</span></div>
+            </div>
+
+            <div style="margin-top: 20px;">
+                <span> Breite</span> <span class="preset-hint">(Chase, Bounce: leuchtende Lampen)</span>
+                <input id="fxWidth" type="range" min="1" max="8" value="1"
+                       oninput="document.getElementById('widthVal').textContent = this.value"
+                       onchange="saveFx()">
+                <div style="margin-top:10px;">Lampen: <span id="widthVal" style="color:#4fc3f7">1</span></div>
+            </div>
+
+            <div style="margin-top: 20px;">
+                <span> Intensität</span> <span class="preset-hint">(Flackern, Dichte, Wellenabstand, Blitzlänge, Nachleuchten)</span>
+                <input id="fxIntensity" type="range" min="0" max="100" value="50"
+                       oninput="document.getElementById('intensityVal').textContent = this.value"
+                       onchange="saveFx()">
+                <div style="margin-top:10px;">Wert: <span id="intensityVal" style="color:#4fc3f7">50</span></div>
             </div>
         </div>
 
@@ -241,10 +283,11 @@ const effects = [
     "fire", "candle", "aurora", "ocean", "sunset",
     "fullstrobe", "randomstrobe",
     "dimmerwave", "dimmerchase", "dimmerbounce",
-    "disco","disco2", "lightorgan"
+    "disco","disco2", "lightorgan",
+    "pump", "snareflash", "basswave"
 ];
 // Anzeigenamen, wo sie vom internen Namen abweichen
-const effectLabels = { lightorgan: "light organ" };
+const effectLabels = { lightorgan: "light organ", snareflash: "snare flash", basswave: "bass wave" };
 const effectLabel = e => effectLabels[e] || e;
 
 const canvas = document.getElementById('colorCanvas');
@@ -313,6 +356,17 @@ function loadConfig() {
                 updateDropUi();
             }
             if(data.palette) showPalette(data.palette);
+            if(data.fadeMs !== undefined) {
+                document.getElementById("fadeMs").value = data.fadeMs;
+                document.getElementById("fadeVal").textContent = fmtFade(data.fadeMs);
+                document.getElementById("fxWidth").value = data.fxWidth;
+                document.getElementById("widthVal").textContent = data.fxWidth;
+                document.getElementById("fxIntensity").value = data.fxIntensity;
+                document.getElementById("intensityVal").textContent = data.fxIntensity;
+                document.getElementById("levelDim").checked = !!data.levelDim;
+                document.getElementById("levelDimDepth").value = String(data.levelDimDepth);
+            }
+            buildStage(data);
             if(data.groups) showGroups(data.groups, data.fixtures || []);
             if(data.fog) {
                 const hasFog = data.fog.channel > 0;
@@ -360,7 +414,14 @@ function updateStatus() {
     fetch("/api/status").then(r => r.json()).then(showStatus).catch(() => {});
 }
 
+let shownPreset = -1;
 function showStatus(data) {
+    // Effekt-Bibliothek und Presets mit dem tatsächlichen Zustand abgleichen
+    if (data.effect !== undefined && data.effect !== currentEffect) setEffect(data.effect, false);
+    if (data.preset !== undefined && data.preset !== shownPreset) {
+        shownPreset = data.preset;
+        markActivePreset();
+    }
     const levelPercent = Math.min(100, data.level * 100); 
     document.getElementById("levelBar").style.width = levelPercent + "%";
     if (data.beat) {
@@ -376,6 +437,9 @@ function showStatus(data) {
     document.getElementById("bpm").textContent = Math.round(data.bpm);
     if (!isDragging) document.getElementById("masterVal").textContent = data.master;
     if (data.spec) drawSpectrum(data.spec);
+    if (data.scheduleDark !== undefined) {
+        document.getElementById("scheduleBadge").style.display = data.scheduleDark ? "" : "none";
+    }
     if (data.standby !== undefined) {
         document.getElementById("standbyBadge").style.display = data.standby ? "" : "none";
     }
@@ -471,6 +535,77 @@ function saveAutoShow() {
     const beats = document.getElementById("showBeats").value;
     fetch(`/api/settings?autoShow=${on}&showBeats=${beats}`);
 }
+
+// --- Übergang / Effekt-Parameter / Lautstärke ---
+function fmtFade(ms) {
+    ms = parseInt(ms);
+    return ms === 0 ? "hart" : (ms / 1000).toLocaleString("de-DE", { maximumFractionDigits: 1 }) + " s";
+}
+
+function saveFx() {
+    const v = id => document.getElementById(id).value;
+    fetch(`/api/settings?fadeMs=${v("fadeMs")}&fxWidth=${v("fxWidth")}&fxIntensity=${v("fxIntensity")}`);
+}
+
+function saveLevelDim() {
+    const on = document.getElementById("levelDim").checked ? 1 : 0;
+    fetch(`/api/settings?levelDim=${on}&levelDimDepth=${document.getElementById("levelDimDepth").value}`);
+}
+
+function scheduleOverride() {
+    fetch("/api/scheduleOverride?on=1");
+}
+
+// --- Virtuelle Bühne: Farben aus den gesendeten DMX-Werten berechnen ---
+let stageItems = [];
+function buildStage(cfg) {
+    const box = document.getElementById("stage");
+    box.innerHTML = "";
+    stageItems = [];
+    (cfg.fixtures || []).forEach(fx => {
+        const def = (cfg.fixtureTypes || {})[fx.type];
+        if (!def) return;
+        const el = document.createElement("div");
+        el.className = "stage-fx";
+        const lamp = document.createElement("div");
+        lamp.className = "stage-lamp";
+        const dot = document.createElement("div");
+        dot.className = "stage-dot";
+        if (def.offsetPan >= 0) lamp.appendChild(dot);
+        const name = document.createElement("div");
+        name.className = "stage-name";
+        name.textContent = fx.name;
+        el.append(lamp, name);
+        box.appendChild(el);
+        stageItems.push({ base: fx.start - 1, def, lamp, dot });
+    });
+    if (!stageItems.length) box.innerHTML = "<div class='preset-hint'>Noch keine Lampen angelegt (DMX-Config).</div>";
+}
+
+function drawStage(data) {
+    const val = (base, off) => (off >= 0 && base + off < data.length) ? data[base + off] : -1;
+    stageItems.forEach(it => {
+        const d = it.def;
+        let dim = val(it.base, d.offsetDimmer); dim = dim < 0 ? 1 : dim / 255;
+        let r = Math.max(0, val(it.base, d.offsetR)), g = Math.max(0, val(it.base, d.offsetG));
+        let b = Math.max(0, val(it.base, d.offsetB)), w = Math.max(0, val(it.base, d.offsetW));
+        r = Math.min(255, (r + w) * dim); g = Math.min(255, (g + w) * dim); b = Math.min(255, (b + w) * dim);
+        const col = `rgb(${r | 0},${g | 0},${b | 0})`;
+        it.lamp.style.background = col;
+        it.lamp.style.boxShadow = (r + g + b > 30) ? `0 0 18px ${col}` : "none";
+        if (d.offsetPan >= 0) {
+            const pan = val(it.base, d.offsetPan), tilt = val(it.base, d.offsetTilt);
+            it.dot.style.left = (Math.max(0, pan) / 255 * 100) + "%";
+            it.dot.style.top = (Math.max(0, tilt) / 255 * 100) + "%";
+        }
+    });
+}
+
+setInterval(() => {
+    if (document.hidden || !document.getElementById("stageCard").open || !stageItems.length) return;
+    fetch("/api/dmx", { cache: "no-store" }).then(r => r.arrayBuffer())
+        .then(buf => drawStage(new Uint8Array(buf))).catch(() => {});
+}, 150);
 
 // --- Spektrum ---
 function drawSpectrum(spec) {
@@ -742,6 +877,7 @@ function loadPresets() {
 
             const btn = document.createElement("button");
             btn.className = "preset-btn";
+            btn.dataset.id = p.id;
             btn.style.borderLeftColor = p.color;
             btn.textContent = p.name;
             btn.title = `${p.effect}, Speed ${p.speed} ms, Master ${p.master}`;
@@ -756,7 +892,13 @@ function loadPresets() {
             item.append(btn, del);
             box.appendChild(item);
         });
+        markActivePreset();
     });
+}
+
+function markActivePreset() {
+    document.querySelectorAll(".preset-btn").forEach(b =>
+        b.classList.toggle("active", parseInt(b.dataset.id) === shownPreset));
 }
 
 function loadPreset(id) {
@@ -821,7 +963,9 @@ function buildEffectButtons() {
     ).join("");
 }
 
+let currentEffect = "";
 function setEffect(name, sendRequest = true) {
+    currentEffect = name;
     if(sendRequest) fetch("/api/setEffect?name=" + name);
     document.getElementById("activeEffect").textContent = effectLabel(name);
     

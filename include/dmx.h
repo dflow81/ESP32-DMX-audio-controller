@@ -22,9 +22,9 @@ void setFixtureColor(int index, uint8_t r, uint8_t g, uint8_t b, uint8_t w);
 // NEU: Setzt Pan und Tilt für ein Fixture (0-255)
 void setFixtureMovement(int index, uint8_t pan, uint8_t tilt);
 
-// Weiche Übergänge: Ein Wechsel (Effekt, Farbe, Preset) wird über FADE_MS eingeblendet.
+// Weiche Übergänge: Ein Wechsel (Effekt, Farbe, Preset) wird über state.fadeMs
+// (bzw. einmalig state.nextFadeMs) eingeblendet.
 // Auslösen per state.fadeRequest = true (auch aus anderen Tasks).
-#define FADE_MS 600
 bool isFading();
 void cancelFade();
 

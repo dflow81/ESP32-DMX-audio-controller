@@ -87,6 +87,9 @@ int findPreset(const String &name) {
 }
 
 void applyPresetData(const Preset &p, bool persist) {
+    if (p.fadeMs >= 0) state.nextFadeMs = p.fadeMs;   // Übergangszeit dieses Presets
+    state.fxWidth = p.fxWidth;
+    state.fxIntensity = p.fxIntensity;
     state.currentEffect = p.effect;
     state.colorR = p.r; state.colorG = p.g; state.colorB = p.b;
     state.timerSpeed = p.timerSpeed;
@@ -115,7 +118,29 @@ void applyPresetData(const Preset &p, bool persist) {
 
 void applyPreset(int index, bool persist) {
     if (index < 0 || index >= (int)state.presets.size()) return;
+    state.lastPresetIndex = index;
+    state.activePreset = index;
     applyPresetData(state.presets[index], persist);
+}
+
+// Tap-Tempo: bis zu 8 Taps mitteln; >2 s Pause beginnt eine neue Folge.
+// Ab dem 2. Tap wird das Tempo übernommen und festgehalten, der Takt auf den Tap ausgerichtet.
+int registerTap() {
+    static unsigned long taps[8];
+    static int tapCount = 0;
+    unsigned long now = millis();
+
+    if (tapCount > 0 && now - taps[tapCount - 1] > 2000) tapCount = 0;
+    if (tapCount == 8) { memmove(taps, taps + 1, 7 * sizeof(taps[0])); tapCount = 7; }
+    taps[tapCount++] = now;
+
+    if (tapCount >= 2) {
+        float avg = (taps[tapCount - 1] - taps[0]) / (float)(tapCount - 1);
+        state.bpm = constrain(60000.0f / avg, 40.0f, 220.0f);
+        state.bpmLocked = true;
+    }
+    if (state.bpmLocked) state.clockSyncMs = now;
+    return (int)roundf(state.bpm);
 }
 
 Preset capturePreset(const String &name) {
@@ -128,6 +153,9 @@ Preset capturePreset(const String &name) {
     p.hasGroups  = true;
     for (int g = 0; g < GROUP_COUNT; g++) p.groups[g] = state.groups[g];
     p.palette    = state.palette;
+    p.fadeMs     = state.fadeMs;
+    p.fxWidth    = state.fxWidth;
+    p.fxIntensity = state.fxIntensity;
     return p;
 }
 
@@ -392,6 +420,9 @@ static void buildConfigDoc(JsonDocument &doc, bool includeWifi) {
         o["r"] = p.r; o["g"] = p.g; o["b"] = p.b;
         o["speed"]  = p.timerSpeed;
         o["master"] = p.master;
+        if (p.fadeMs >= 0) o["fade"] = p.fadeMs;
+        o["w"] = p.fxWidth;
+        o["i"] = p.fxIntensity;
         if (p.hasGroups) {
             // Kompakt: Gruppen/Palette nur speichern, wenn sie benutzt werden (NVS ist klein)
             o["v2"] = true;
@@ -414,6 +445,33 @@ static void buildConfigDoc(JsonDocument &doc, bool includeWifi) {
     fog["dropSec"]     = state.fogDropSec;
     fog["intervalMin"] = state.fogIntervalMin;
     fog["intervalSec"] = state.fogIntervalSec;
+
+    // Übergänge, Effekt-Parameter, Lautstärke-Helligkeit
+    doc["fadeMs"]        = state.fadeMs;
+    doc["fxWidth"]       = state.fxWidth;
+    doc["fxIntensity"]   = state.fxIntensity;
+    doc["levelDim"]      = state.levelDim;
+    doc["levelDimDepth"] = state.levelDimDepth;
+
+    // Moving-Head-Positionen
+    JsonArray positions = doc["positions"].to<JsonArray>();
+    for (auto &pos : state.positions) {
+        JsonObject o = positions.add<JsonObject>();
+        o["name"] = pos.name;
+        JsonArray heads = o["heads"].to<JsonArray>();
+        for (auto &h : pos.heads) {
+            JsonObject ho = heads.add<JsonObject>();
+            ho["f"] = h.fixture; ho["p"] = h.pan; ho["t"] = h.tilt;
+        }
+    }
+
+    // Zeitplan, Display
+    JsonObject sched = doc["schedule"].to<JsonObject>();
+    sched["on"]     = state.scheduleOn;
+    sched["start"]  = state.scheduleStart;
+    sched["end"]    = state.scheduleEnd;
+    sched["preset"] = state.schedulePreset;
+    doc["displayOffMin"] = state.displayOffMin;
 
     // Standby
     doc["standbyMin"]    = state.standbyMin;
@@ -608,6 +666,9 @@ void loadConfig() {
         p.b          = o["b"]      | 0;
         p.timerSpeed = constrain((int)(o["speed"] | 500), TIMER_SPEED_MIN, TIMER_SPEED_MAX);
         p.master     = constrain((int)(o["master"] | 255), 0, 255);
+        p.fadeMs     = o["fade"].is<int>() ? constrain((int)o["fade"], 0, 10000) : -1;
+        p.fxWidth    = constrain((int)(o["w"] | 1), 1, 8);
+        p.fxIntensity = constrain((int)(o["i"] | 50), 0, 100);
         if ((o["v2"] | false) || o["groups"].is<JsonArray>()) {
             p.hasGroups = true;   // fehlende Gruppen/Palette = nicht benutzt (custom/on = false)
             groupsFromJson(o["groups"].as<JsonArray>(), p.groups);
@@ -628,6 +689,33 @@ void loadConfig() {
     state.fogDropSec     = constrain((int)(fog["dropSec"]     | 3), 1, 30);
     state.fogIntervalMin = constrain((int)(fog["intervalMin"] | 0), 0, 120);
     state.fogIntervalSec = constrain((int)(fog["intervalSec"] | 5), 1, 30);
+
+    // Übergänge, Effekt-Parameter, Lautstärke-Helligkeit
+    state.fadeMs        = constrain((int)(doc["fadeMs"] | 600), 0, 10000);
+    state.fxWidth       = constrain((int)(doc["fxWidth"] | 1), 1, 8);
+    state.fxIntensity   = constrain((int)(doc["fxIntensity"] | 50), 0, 100);
+    state.levelDim      = doc["levelDim"] | false;
+    state.levelDimDepth = constrain((int)(doc["levelDimDepth"] | 50), 0, 100);
+
+    // Moving-Head-Positionen
+    state.positions.clear();
+    for (JsonObject o : doc["positions"].as<JsonArray>()) {
+        if (state.positions.size() >= MAX_POSITIONS) break;
+        MhPosition pos;
+        pos.name = o["name"] | "Position";
+        for (JsonObject h : o["heads"].as<JsonArray>()) {
+            pos.heads.push_back({h["f"] | "", (uint8_t)(h["p"] | 128), (uint8_t)(h["t"] | 128)});
+        }
+        state.positions.push_back(pos);
+    }
+
+    // Zeitplan, Display
+    JsonObject sched = doc["schedule"].as<JsonObject>();
+    state.scheduleOn     = sched["on"]     | false;
+    state.scheduleStart  = sched["start"]  | "18:00";
+    state.scheduleEnd    = sched["end"]    | "02:00";
+    state.schedulePreset = sched["preset"] | "";
+    state.displayOffMin  = constrain((int)(doc["displayOffMin"] | 15), 0, 240);
 
     // Standby
     state.standbyMin    = constrain((int)(doc["standbyMin"] | 0), 0, 240);
