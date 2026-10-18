@@ -513,3 +513,15 @@ details.card > summary { cursor: pointer; }
     font-weight: bold;
     box-shadow: inset 0 0 0 1px #4fc3f7;
 }
+
+/* Preset-Energie (intelligente Auto-Show) */
+.preset-energy {
+    padding: 8px 6px;
+    border-radius: 0;
+    color: #666;
+    font-size: 12px;
+}
+.preset-energy.e1 { color: #69f0ae; }
+.preset-energy.e2 { color: #ffd54f; }
+.preset-energy.e3 { color: #ff5252; }
+.stage-fx { cursor: pointer; }

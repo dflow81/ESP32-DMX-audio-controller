@@ -344,7 +344,7 @@ void taskAudio(void *pv) {
 
         unsigned long sinceLastKick = millis() - lastKickTime; // vor updateKickBPM() merken
         if (isKick) {
-            if (!state.bpmLocked) {
+            if (!state.bpmLocked && !state.syncReceiving) {   // als Sync-Slave kommen Beats vom Master
                 state.lastBeatMs = millis();
                 state.beatCount++;   // Effekt-Task wertet die Änderung aus
             }
@@ -377,7 +377,7 @@ void taskAudio(void *pv) {
         double totalE = 0;
         for(int i=2; i<250; i++) totalE += vReal[i];
 
-        if (detectDrop(totalE, isKick, kRaw, sinceLastKick)) {
+        if (detectDrop(totalE, isKick, kRaw, sinceLastKick) && !state.syncReceiving) {
             state.drop = true;
             dropStartTime = millis();
             state.dropStartMs = dropStartTime;

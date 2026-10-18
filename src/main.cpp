@@ -11,6 +11,8 @@
 #include "display.h"
 #include "buttons.h"
 #include "schedule.h"
+#include "sync.h"
+#include "mqtt.h"
 
 
 // Geplanter Neustart (z. B. nach dem Speichern der WLAN-Daten)
@@ -24,11 +26,55 @@ void scheduleRestart(unsigned long delayMs) {
 // Auto-Show: schaltet alle showBeats Beats zum nächsten Preset.
 // Ohne erkannte Beats wird mit 120 BPM gerechnet (0,5 s pro Beat).
 // Aufruf im Effekt-Task mit gehaltenem StateLock.
-static void handleAutoShow() {
+// Energie der Musik einschätzen: Lautstärke (geglättet) + Kicks pro Sekunde (letzte 8 s).
+// Ein neuer Wert gilt erst, wenn er 2 s stabil ist (kein Hin- und Herspringen).
+static void updateMusicEnergy() {
+    static float lvl = 0;
+    static unsigned long kickTimes[32] = {0};
+    static int kickPos = 0;
+    static uint32_t lastKicks = 0;
+    static uint8_t candidate = ENERGY_CALM;
+    static unsigned long candidateSince = 0;
+
+    unsigned long now = millis();
+    uint32_t kc = state.audioKickCount;
+    while (lastKicks != kc) { lastKicks++; kickTimes[kickPos] = now; kickPos = (kickPos + 1) % 32; }
+    int recent = 0;
+    for (unsigned long t : kickTimes) if (t && now - t < 8000) recent++;
+    float rate = recent / 8.0f;
+
+    float l = constrain(state.level / max(1.0, state.refLevel), 0.0, 2.0);
+    lvl += (l - lvl) * 0.01f;   // ~2 s Glättung bei 50 Bildern/s
+
+    uint8_t e = ENERGY_MEDIUM;
+    if (rate < 0.5f || lvl < 0.25f) e = ENERGY_CALM;
+    else if (lvl > 0.6f && rate >= 1.6f) e = ENERGY_WILD;
+
+    if (e != candidate) { candidate = e; candidateSince = now; }
+    else if (now - candidateSince > 2000) state.musicEnergy = e;
+}
+
+// Preset passend zur Energie wählen: gleiche Energie, sonst "egal", sonst irgendeins.
+// Das gerade laufende Preset nur, wenn es keine Alternative gibt.
+static int pickPresetForEnergy(uint8_t energy, int current) {
+    std::vector<int> pool;
+    for (int pass = 0; pass < 3 && pool.empty(); pass++) {
+        for (int i = 0; i < (int)state.presets.size(); i++) {
+            uint8_t pe = state.presets[i].energy;
+            bool match = (pass == 0) ? pe == energy : (pass == 1) ? pe == ENERGY_ANY : true;
+            if (match && i != current) pool.push_back(i);
+        }
+    }
+    if (pool.empty()) return current;
+    return pool[random(0, pool.size())];
+}
+
+static void handleAutoShow(bool newDrop) {
     static bool wasOn = false;
     static uint32_t startBeat = 0;
     static unsigned long startMs = 0;
     static int index = -1;
+    static uint8_t lastEnergy = ENERGY_CALM;
 
     unsigned long now = millis();
     // Während Standby oder laufender Cue-Liste pausiert die Auto-Show
@@ -41,12 +87,23 @@ static void handleAutoShow() {
         return;
     }
 
+    uint32_t beatsSince = state.beatCount - startBeat;
     bool due = (state.bpm >= 30)
-        ? (state.beatCount - startBeat >= (uint32_t)state.showBeats)
+        ? (beatsSince >= (uint32_t)state.showBeats)
         : (now - startMs >= (unsigned long)state.showBeats * 500UL);
-    if (!due) return;
 
-    index = (index + 1) % state.presets.size();
+    if (state.autoShowSmart) {
+        // Intelligent: auch sofort wechseln, wenn sich die Energie ändert (nach min. 8 Beats)
+        // oder ein Drop kommt (dann ein "wildes" Preset)
+        uint8_t energy = newDrop ? ENERGY_WILD : state.musicEnergy;
+        bool energyChanged = energy != lastEnergy && beatsSince >= 8;
+        if (!due && !energyChanged && !newDrop) return;
+        lastEnergy = energy;
+        index = pickPresetForEnergy(energy, index);
+    } else {
+        if (!due) return;
+        index = (index + 1) % state.presets.size();
+    }
     applyPreset(index, false); // nicht speichern → schont den Flash
     startBeat = state.beatCount;
     startMs = now;
@@ -223,6 +280,13 @@ static int runEffectFrame(bool dropReaction, bool &wasStrobing) {
     }
     wasStrobing = strobing;
 
+    // Lampe finden: gewähltes Fixture blinkt weiß (über jedem Effekt)
+    int idf = state.identifyIndex;
+    if (idf >= 0 && idf < (int)state.fixtures.size() && (long)(state.identifyUntil - millis()) > 0) {
+        uint8_t v = ((millis() / 250) % 2) ? 255 : 0;
+        setFixtureColor(idf, v, v, v, v);
+    }
+
     // Immer senden: DMX-Geräte erwarten laufend Daten (und der Nebelkanal muss raus)
     updateDMX();
 
@@ -260,6 +324,9 @@ void effectTask(void *param) {
             state.beat = (beats != lastBeatCount);
             lastBeatCount = beats;
 
+            // --- SYNC: Slave übernimmt Beat, Effekt & Co. vom Master ---
+            applySyncFromMaster();
+
             // --- DROP ---
             uint32_t drops = state.dropCount;
             bool newDrop = (drops != lastDropCount);
@@ -267,13 +334,14 @@ void effectTask(void *param) {
             if (newDrop && state.dropAction == DROP_PRESET) {
                 applyPreset(findPreset(state.dropPreset), false);
             }
-            bool dropReaction = state.drop && state.dropAction != DROP_PRESET &&
+            bool dropReaction = state.dropCount > 0 && state.dropAction != DROP_PRESET &&
                                 millis() - state.dropStartMs < DROP_HOLD_MS;
 
             // --- STANDBY, CUE-LISTE, AUTO-SHOW, NEBEL ---
             handleStandby();
             handleCues();
-            handleAutoShow();
+            updateMusicEnergy();
+            handleAutoShow(newDrop);
             handleFog(newDrop);
 
             // --- PC-STEUERUNG (Art-Net / sACN) ---
@@ -317,6 +385,8 @@ void setup() {
     setupNetInput(); // Art-Net / sACN, falls eingeschaltet
     setupSchedule(); // Uhrzeit per NTP für den Zeitplan
     setupButtons();  // Taster / Fußschalter
+    setupSync();     // ESP-NOW (mehrere Controller synchron)
+    setupMqtt();     // MQTT / Home Assistant (eigener Task)
 
     // Core 0: Audio (+ WLAN-Stack, Display)
     xTaskCreatePinnedToCore(taskAudio, "AudioTask", 10240, NULL, PRIO_AUDIO, &loadStats.audioTask, CORE_AUDIO);
@@ -335,6 +405,7 @@ void loop() {
     handleOTA();
     handleButtons();
     handleSchedule();
+    handleSync();
     handleLiveStatus();
 
     if (restartAt && (long)(millis() - restartAt) >= 0) {

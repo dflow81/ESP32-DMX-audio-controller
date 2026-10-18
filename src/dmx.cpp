@@ -334,6 +334,15 @@ void updateDMX() {
         if (i == fogIdx) out = fogOn ? state.fogLevel : 0;
         sentOut[i] = out;
     }
+
+    // Kanaltest: von Hand gesetzte Kanäle haben Vorrang (roh, ohne Master)
+    if ((long)(state.testUntil - now) > 0) {
+        for (int i = 0; i < 512; i++) {
+            if (!state.testMask[i]) continue;
+            if (i >= total) { memset(sentOut + total, 0, i - total); total = i + 1; }
+            sentOut[i] = state.testVal[i];
+        }
+    }
     publishFrame(total);
 }
 

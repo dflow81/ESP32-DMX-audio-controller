@@ -611,6 +611,30 @@ void effectBassWave() {
 }
 
 // --------------------------------------------------
+// EIGENES LAUFLICHT (user1 … user4): Schritte aus dem Editor, im Effekt-Takt
+// (Speed-Regler bzw. "Im Takt"); optional weich zwischen den Schritten
+// --------------------------------------------------
+static void effectUserChase(int slot) {
+    if (slot < 0 || slot >= USER_CHASES) return;
+    const UserChase &uc = state.userChases[slot];
+    if (uc.name.isEmpty() || uc.steps == 0 || uc.width == 0) return;
+
+    double pos = stepPos();
+    int step = ((long)pos) % uc.steps;
+    int next = (step + 1) % uc.steps;
+    float f = uc.smooth ? (float)(pos - floor(pos)) : 0.0f;
+
+    for (int i = 0; i < fxCount(); i++) {
+        int x = i % uc.width;
+        uint32_t a = uc.cells[step][x], b = uc.cells[next][x];
+        uint8_t r = ((a >> 16) & 0xFF) + ((int)((b >> 16) & 0xFF) - (int)((a >> 16) & 0xFF)) * f;
+        uint8_t g = ((a >> 8) & 0xFF)  + ((int)((b >> 8) & 0xFF)  - (int)((a >> 8) & 0xFF))  * f;
+        uint8_t bl = (a & 0xFF)        + ((int)(b & 0xFF)         - (int)(a & 0xFF))         * f;
+        fxColor(i, r, g, bl, 255);
+    }
+}
+
+// --------------------------------------------------
 // DROP-REAKTION (überschreibt den Effekt für DROP_HOLD_MS)
 // --------------------------------------------------
 void effectDropReaction(uint8_t action, unsigned long elapsed) {
@@ -701,4 +725,5 @@ static void runEffectNamed(const String& name) {
     else if (name == "pump") effectPump();
     else if (name == "snareflash") effectSnareFlash();
     else if (name == "basswave") effectBassWave();
+    else if (name.startsWith("user")) effectUserChase(name.substring(4).toInt() - 1);
 }

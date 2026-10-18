@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lauflicht-Editor</title>
+    <link rel="stylesheet" href="/style.css">
+    <style>
+        .ll-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; font-size: 13px; }
+        .ll-row input[type=text], .ll-row select {
+            padding: 6px 8px; background: #2a2a2a; color: #eee; border: 1px solid #444; border-radius: 6px;
+        }
+        .brushes { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+        .brush { width: 30px; height: 30px; border-radius: 50%; border: 2px solid #444; cursor: pointer; }
+        .brush.active { border-color: #fff; box-shadow: 0 0 6px #fff; }
+        #brushColor { width: 40px; height: 32px; border: none; background: none; padding: 0; }
+        .grid-wrap { overflow-x: auto; margin-top: 14px; }
+        .ll-grid { display: grid; gap: 4px; touch-action: none; user-select: none; -webkit-user-select: none; }
+        .ll-cell { width: 34px; height: 34px; border-radius: 6px; border: 1px solid #333; background: #000; }
+        .ll-label { font-size: 10px; color: #777; text-align: center; align-self: center; }
+        .ll-cell.playing { outline: 2px solid #4fc3f7; }
+        .preview { display: flex; gap: 6px; margin-top: 12px; }
+        .preview div { width: 26px; height: 26px; border-radius: 50%; background: #000; border: 1px solid #333; }
+        .hint { font-size: 11px; color: #888; margin-top: 8px; }
+    </style>
+</head>
+<body>
+
+<div class="nav">
+    <img src="/logo.svg" class="nav-logo" alt="">
+    <a href="/">Home</a>
+    <a href="/wifi">WLAN</a>
+    <a href="/dmxconfig">DMX</a>
+    <a href="/mh">Moving Head</a>
+    <a href="/lauflicht" class="active">Lauflicht</a>
+    <a href="/monitor">Monitor</a>
+    <a href="/update">Update</a>
+</div>
+
+<div class="container">
+    <div class="card">
+        <span>Eigene Lauflichter</span>
+        <div class="ll-row">
+            <select id="slot" onchange="showSlot()"></select>
+            <input type="text" id="name" maxlength="20" placeholder="Name, z. B. Polizei">
+        </div>
+        <div class="ll-row">
+            <label>Lampen <select id="width" onchange="resize()"></select></label>
+            <label>Schritte <select id="steps" onchange="resize()"></select></label>
+            <label><input type="checkbox" id="smooth"> weich überblenden</label>
+        </div>
+
+        <div class="brushes" id="brushes">
+            <span style="font-size:13px;">Pinsel:</span>
+            <input type="color" id="brushColor" value="#ff0000" oninput="setBrush(this.value)">
+        </div>
+
+        <div class="grid-wrap"><div id="grid" class="ll-grid"></div></div>
+        <div class="hint">Zeile = Schritt, Spalte = Lampe. Tippen oder darüberwischen malt mit dem Pinsel.
+            Gibt es mehr Lampen als Spalten, wiederholt sich das Muster. Tempo: Speed-Regler bzw. „Im Takt“.</div>
+
+        <div class="preview" id="preview"></div>
+
+        <div class="ll-row">
+            <button onclick="makeRunner()">Lauflicht-Muster</button>
+            <button onclick="clearGrid()">Alles schwarz</button>
+            <button class="btn-save" onclick="save()">Speichern</button>
+            <button onclick="testIt()">Testen</button>
+            <button onclick="removeIt()">Löschen</button>
+        </div>
+        <div class="hint" id="msg"></div>
+    </div>
+</div>
+
+<script>
+const MAX_W = 8, MAX_S = 16;
+const QUICK = ["#000000", "#ff0000", "#00ff00", "#0000ff", "#ffffff", "#ffff00", "#ff00ff", "#00ffff", "#ff8000"];
+let chases = [];
+let cells = [];         // [step][x] = "#rrggbb"
+let brush = "#ff0000";
+let painting = false;
+
+function el(id) { return document.getElementById(id); }
+
+function initSelects() {
+    for (let i = 1; i <= MAX_W; i++) el("width").appendChild(new Option(i, i));
+    for (let i = 1; i <= MAX_S; i++) el("steps").appendChild(new Option(i, i));
+    const box = el("brushes");
+    QUICK.forEach(c => {
+        const b = document.createElement("div");
+        b.className = "brush";
+        b.style.background = c;
+        b.dataset.color = c;
+        b.onclick = () => setBrush(c);
+        box.appendChild(b);
+    });
+    setBrush(brush);
+}
+
+function setBrush(c) {
+    brush = c;
+    el("brushColor").value = c;
+    document.querySelectorAll(".brush").forEach(b => b.classList.toggle("active", b.dataset.color === c));
+}
+
+function load() {
+    fetch("/api/chases").then(r => r.json()).then(list => {
+        chases = list;
+        const sel = el("slot");
+        const keep = sel.value || "0";
+        sel.innerHTML = "";
+        list.forEach((c, i) => sel.appendChild(new Option(`Platz ${i + 1}: ${c.name || "(frei)"}`, i)));
+        sel.value = keep;
+        showSlot();
+    });
+}
+
+function showSlot() {
+    const c = chases[el("slot").value];
+    el("name").value = c.name || "";
+    el("width").value = c.name ? c.width : 4;
+    el("steps").value = c.name ? c.steps : 4;
+    el("smooth").checked = !!c.smooth;
+    cells = [];
+    for (let s = 0; s < MAX_S; s++) {
+        cells.push([]);
+        for (let x = 0; x < MAX_W; x++) cells[s].push(c.cells[s * MAX_W + x] || "#000000");
+    }
+    if (!c.name) makeRunner();
+    else renderGrid();
+}
+
+function resize() { renderGrid(); }
+
+function renderGrid() {
+    const w = parseInt(el("width").value), st = parseInt(el("steps").value);
+    const grid = el("grid");
+    grid.style.gridTemplateColumns = `24px repeat(${w}, 34px)`;
+    grid.innerHTML = "";
+    for (let s = 0; s < st; s++) {
+        const lbl = document.createElement("div");
+        lbl.className = "ll-label";
+        lbl.textContent = s + 1;
+        grid.appendChild(lbl);
+        for (let x = 0; x < w; x++) {
+            const cell = document.createElement("div");
+            cell.className = "ll-cell";
+            cell.dataset.s = s; cell.dataset.x = x;
+            cell.style.background = cells[s][x];
+            grid.appendChild(cell);
+        }
+    }
+    renderPreviewLamps();
+}
+
+// Malen mit Maus/Finger (auch Wischen über mehrere Felder)
+function paintAt(target) {
+    if (!target || !target.classList || !target.classList.contains("ll-cell")) return;
+    cells[target.dataset.s][target.dataset.x] = brush;
+    target.style.background = brush;
+}
+el("grid").addEventListener("pointerdown", e => { painting = true; paintAt(e.target); e.preventDefault(); });
+el("grid").addEventListener("pointermove", e => {
+    if (painting) paintAt(document.elementFromPoint(e.clientX, e.clientY));
+});
+window.addEventListener("pointerup", () => painting = false);
+
+function makeRunner() {
+    // Eine Lampe in Pinselfarbe läuft von links nach rechts
+    const w = parseInt(el("width").value);
+    el("steps").value = w;
+    for (let s = 0; s < MAX_S; s++)
+        for (let x = 0; x < MAX_W; x++) cells[s][x] = (x === s % w) ? (brush === "#000000" ? "#ff0000" : brush) : "#000000";
+    renderGrid();
+}
+
+function clearGrid() {
+    for (let s = 0; s < MAX_S; s++) for (let x = 0; x < MAX_W; x++) cells[s][x] = "#000000";
+    renderGrid();
+}
+
+// Vorschau: spielt die Schritte im Browser ab
+let previewStep = 0;
+function renderPreviewLamps() {
+    const w = parseInt(el("width").value);
+    const p = el("preview");
+    p.innerHTML = "";
+    for (let x = 0; x < w; x++) p.appendChild(document.createElement("div"));
+}
+setInterval(() => {
+    const w = parseInt(el("width").value), st = parseInt(el("steps").value);
+    if (!cells.length) return;
+    previewStep = (previewStep + 1) % st;
+    el("preview").querySelectorAll("div").forEach((d, x) => d.style.background = cells[previewStep][x]);
+    document.querySelectorAll(".ll-cell").forEach(c => c.classList.toggle("playing", parseInt(c.dataset.s) === previewStep));
+}, 500);
+
+function save(then) {
+    const name = el("name").value.trim();
+    if (!name) { alert("Bitte einen Namen eingeben."); return Promise.resolve(false); }
+    const slot = parseInt(el("slot").value) + 1;
+    const body = {
+        name, width: parseInt(el("width").value), steps: parseInt(el("steps").value),
+        smooth: el("smooth").checked, cells: cells.flat()
+    };
+    return fetch("/api/saveChase?slot=" + slot, { method: "POST", body: JSON.stringify(body) })
+        .then(r => {
+            el("msg").textContent = r.ok ? "Gespeichert – erscheint als ★ " + name + " in der Effekt-Bibliothek." : "Fehler beim Speichern.";
+            if (r.ok) load();
+            return r.ok;
+        });
+}
+
+function testIt() {
+    const slot = parseInt(el("slot").value) + 1;
+    save().then(ok => { if (ok) fetch("/api/setEffect?name=user" + slot); });
+}
+
+function removeIt() {
+    const slot = parseInt(el("slot").value) + 1;
+    if (!confirm("Dieses Lauflicht löschen?")) return;
+    fetch("/api/saveChase?slot=" + slot, { method: "POST", body: JSON.stringify({ name: "" }) }).then(load);
+}
+
+initSelects();
+load();
+</script>
+</body>
+</html>

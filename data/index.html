@@ -16,6 +16,7 @@
     <a href="/wifi">WLAN</a>
     <a href="/dmxconfig">DMX</a>
     <a href="/mh">Moving Head</a>
+    <a href="/lauflicht">Lauflicht</a>
     <a href="/monitor">Monitor</a>
     <a href="/update">Update</a>
 </div>
@@ -37,6 +38,7 @@
                 </div>
                 <div id="netBadge" class="net-badge" style="display:none;">PC-Steuerung aktiv (Art-Net/sACN) – Effekte pausiert</div>
                 <div id="standbyBadge" class="net-badge" style="display:none;">Standby – keine Musik erkannt</div>
+                <div id="syncBadge" class="net-badge" style="display:none;"></div>
                 <div id="scheduleBadge" class="net-badge" style="display:none;">Zeitplan: Licht ist gerade aus
                     <button class="btn-small" onclick="scheduleOverride()">Jetzt einschalten</button></div>
                 <div class="tap-row">
@@ -242,6 +244,10 @@
             </select>
         </div>
         <div class="opt-row">
+            <label><input type="checkbox" id="autoShowSmart" onchange="saveAutoShow()"> nach Musik-Energie</label>
+            <span class="preset-hint">Musik gerade: <b id="energyNow">–</b>. Presets mit ⚡ als ruhig/mittel/wild markieren.</span>
+        </div>
+        <div class="opt-row">
             <span>Standby nach</span>
             <select id="standbyMin" onchange="saveStandby()">
                 <option value="0">aus</option>
@@ -277,7 +283,7 @@
 
 <script>
 let isDragging = false;
-const effects = [
+const baseEffects = [
     "static", "fade", "rainbow", "chase", "bounce",
     "dualwave", "pulse", "sparkle", "strobe",
     "fire", "candle", "aurora", "ocean", "sunset",
@@ -286,8 +292,22 @@ const effects = [
     "disco","disco2", "lightorgan",
     "pump", "snareflash", "basswave"
 ];
-// Anzeigenamen, wo sie vom internen Namen abweichen
+let effects = baseEffects.slice();
+// Anzeigenamen, wo sie vom internen Namen abweichen (eigene Lauflichter kommen dazu)
 const effectLabels = { lightorgan: "light organ", snareflash: "snare flash", basswave: "bass wave" };
+const esc = t => String(t).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+// Eigene Lauflichter als Effekte "user1"…"user4" ergänzen
+function setUserChases(names) {
+    effects = baseEffects.slice();
+    (names || []).forEach((n, i) => {
+        if (!n) return;
+        effects.push("user" + (i + 1));
+        effectLabels["user" + (i + 1)] = "★ " + n;
+    });
+    buildEffectButtons();
+    setEffect(currentEffect || "static", false);
+}
 const effectLabel = e => effectLabels[e] || e;
 
 const canvas = document.getElementById('colorCanvas');
@@ -367,6 +387,8 @@ function loadConfig() {
                 document.getElementById("levelDimDepth").value = String(data.levelDimDepth);
             }
             buildStage(data);
+            if (data.userChases) setUserChases(data.userChases);
+            if (data.autoShowSmart !== undefined) document.getElementById("autoShowSmart").checked = data.autoShowSmart;
             if(data.groups) showGroups(data.groups, data.fixtures || []);
             if(data.fog) {
                 const hasFog = data.fog.channel > 0;
@@ -437,6 +459,15 @@ function showStatus(data) {
     document.getElementById("bpm").textContent = Math.round(data.bpm);
     if (!isDragging) document.getElementById("masterVal").textContent = data.master;
     if (data.spec) drawSpectrum(data.spec);
+    if (data.energy !== undefined) document.getElementById("energyNow").textContent = ENERGY_NAMES[data.energy];
+    if (data.sync !== undefined) {
+        const sb = document.getElementById("syncBadge");
+        let txt = "";
+        if (data.sync === 1) txt = "Sync: Master – sendet an andere Controller";
+        if (data.sync === 2) txt = data.syncRx ? "Sync: Slave – folgt dem Master" : "Sync: Slave – kein Master gefunden";
+        sb.textContent = txt;
+        sb.style.display = txt ? "" : "none";
+    }
     if (data.scheduleDark !== undefined) {
         document.getElementById("scheduleBadge").style.display = data.scheduleDark ? "" : "none";
     }
@@ -532,9 +563,12 @@ function saveDropAction() {
 // --- Auto-Show ---
 function saveAutoShow() {
     const on = document.getElementById("autoShow").checked ? 1 : 0;
+    const smart = document.getElementById("autoShowSmart").checked ? 1 : 0;
     const beats = document.getElementById("showBeats").value;
-    fetch(`/api/settings?autoShow=${on}&showBeats=${beats}`);
+    fetch(`/api/settings?autoShow=${on}&showBeats=${beats}&autoShowSmart=${smart}`);
 }
+
+const ENERGY_NAMES = ["egal", "ruhig", "mittel", "wild"];
 
 // --- Übergang / Effekt-Parameter / Lautstärke ---
 function fmtFade(ms) {
@@ -562,7 +596,7 @@ function buildStage(cfg) {
     const box = document.getElementById("stage");
     box.innerHTML = "";
     stageItems = [];
-    (cfg.fixtures || []).forEach(fx => {
+    (cfg.fixtures || []).forEach((fx, index) => {
         const def = (cfg.fixtureTypes || {})[fx.type];
         if (!def) return;
         const el = document.createElement("div");
@@ -577,6 +611,8 @@ function buildStage(cfg) {
         name.textContent = fx.name;
         el.append(lamp, name);
         box.appendChild(el);
+        el.title = "Tippen: Lampe blinkt 5 s";
+        el.onclick = () => fetch("/api/identify?id=" + index);
         stageItems.push({ base: fx.start - 1, def, lamp, dot });
     });
     if (!stageItems.length) box.innerHTML = "<div class='preset-hint'>Noch keine Lampen angelegt (DMX-Config).</div>";
@@ -889,7 +925,13 @@ function loadPresets() {
             del.title = "Löschen";
             del.onclick = () => deletePreset(p.id, p.name);
 
-            item.append(btn, del);
+            const en = document.createElement("button");
+            en.className = "preset-energy e" + (p.energy || 0);
+            en.textContent = p.energy ? "⚡" + ["", "1", "2", "3"][p.energy] : "⚡";
+            en.title = "Energie: " + ENERGY_NAMES[p.energy || 0] + " (tippen zum Ändern)";
+            en.onclick = () => fetch(`/api/presetEnergy?id=${p.id}&e=${((p.energy || 0) + 1) % 4}`).then(loadPresets);
+
+            item.append(btn, en, del);
             box.appendChild(item);
         });
         markActivePreset();
@@ -959,7 +1001,7 @@ function setTimer() {
 function buildEffectButtons() {
     const container = document.getElementById("effectButtons");
     container.innerHTML = effects.map(e => 
-        `<button id="btn-${e}" class="effect-btn" onclick="setEffect('${e}')">${effectLabel(e)}</button>`
+        `<button id="btn-${e}" class="effect-btn" onclick="setEffect('${e}')">${esc(effectLabel(e))}</button>`
     ).join("");
 }
 

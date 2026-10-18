@@ -47,6 +47,7 @@ static const char UPDATE_PAGE[] PROGMEM = R"rawliteral(<!DOCTYPE html>
   <a href="/wifi">WLAN</a>
   <a href="/dmxconfig">DMX</a>
   <a href="/mh">Moving Head</a>
+  <a href="/lauflicht">Lauflicht</a>
   <a href="/monitor">Monitor</a>
   <a href="/update" class="active">Update</a>
 </div>

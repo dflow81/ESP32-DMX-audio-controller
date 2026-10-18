@@ -99,7 +99,29 @@ struct Preset {
     int     fadeMs = -1;
     uint8_t fxWidth = 1;
     uint8_t fxIntensity = 50;
+
+    // Energie für die intelligente Auto-Show: 0 = egal, 1 = ruhig, 2 = mittel, 3 = wild
+    uint8_t energy = 0;
 };
+
+// Energie der Musik (für die intelligente Auto-Show)
+enum MusicEnergy { ENERGY_ANY = 0, ENERGY_CALM = 1, ENERGY_MEDIUM = 2, ENERGY_WILD = 3 };
+
+// Eigenes Lauflicht: Raster aus "width" Positionen × "steps" Schritten.
+// Fixture i nimmt Position i % width. Farben als 0xRRGGBB.
+#define USER_CHASES      4
+#define USER_CHASE_WIDTH 8
+#define USER_CHASE_STEPS 16
+struct UserChase {
+    String  name;                 // leer = Platz frei
+    uint8_t width = 4;
+    uint8_t steps = 4;
+    bool    smooth = false;       // zwischen den Schritten überblenden
+    uint32_t cells[USER_CHASE_STEPS][USER_CHASE_WIDTH] = {{0}};
+};
+
+// Synchronisation mehrerer Controller per ESP-NOW
+enum SyncRole { SYNC_OFF = 0, SYNC_MASTER = 1, SYNC_SLAVE = 2 };
 
 // Gespeicherte Moving-Head-Position (pro Head Pan/Tilt, zugeordnet über den Namen)
 #define MAX_POSITIONS 8
@@ -213,9 +235,37 @@ struct ControllerState {
     // Gerade aktives Preset (für die Anzeige); -1, sobald Effekt/Farbe von Hand geändert werden
     volatile int activePreset = -1;
 
+    // Lampe finden: Fixture blinkt weiß bis identifyUntil
+    volatile int identifyIndex = -1;
+    volatile unsigned long identifyUntil = 0;
+
+    // Kanaltest: einzelne DMX-Kanäle von Hand setzen (endet automatisch nach 2 Min ohne Änderung)
+    bool    testMask[512] = {false};
+    uint8_t testVal[512] = {0};
+    volatile unsigned long testUntil = 0;
+
+    // Eigene Lauflichter
+    UserChase userChases[USER_CHASES];
+
+    // Synchronisation (ESP-NOW)
+    uint8_t syncRole = SYNC_OFF;
+    uint8_t syncGroup = 1;               // nur Controller derselben Gruppe hören aufeinander
+    volatile bool syncReceiving = false; // Slave: bekommt gerade Daten vom Master
+
+    // MQTT / Home Assistant
+    bool    mqttOn = false;
+    String  mqttHost = "";
+    int     mqttPort = 1883;
+    String  mqttUser = "";
+    String  mqttPass = "";
+    String  mqttTopic = "dmxcontroller";
+    volatile bool mqttConnected = false;
+
     // Presets + Auto-Show
     std::vector<Preset> presets;
     bool autoShow = false;      // Presets automatisch durchschalten
+    bool autoShowSmart = false; // … passend zur Energie der Musik
+    volatile uint8_t musicEnergy = ENERGY_CALM; // aktuelle Einschätzung
     int  showBeats = 32;        // … alle so viele Beats
 
     // Gruppen + Palette

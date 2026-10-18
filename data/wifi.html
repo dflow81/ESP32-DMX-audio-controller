@@ -15,6 +15,7 @@
     <a href="/wifi" class="active">WLAN</a>
     <a href="/dmxconfig">DMX</a>
     <a href="/mh">Moving Head</a>
+    <a href="/lauflicht">Lauflicht</a>
     <a href="/monitor">Monitor</a>
     <a href="/update">Update</a>
 </div>
@@ -50,6 +51,46 @@
     </div>
 
     <!-- RESET BEREICH -->
+    <div class="card">
+        <h2>Mehrere Controller synchron</h2>
+        <div class="net-row">
+            <label>Rolle
+                <select id="syncRole" onchange="saveSync()">
+                    <option value="0">aus</option>
+                    <option value="1">Master (gibt den Takt vor)</option>
+                    <option value="2">Slave (folgt dem Master)</option>
+                </select>
+            </label>
+            <label>Gruppe
+                <select id="syncGroup" onchange="saveSync()">
+                    <option>1</option><option>2</option><option>3</option><option>4</option><option>5</option>
+                    <option>6</option><option>7</option><option>8</option><option>9</option>
+                </select>
+            </label>
+        </div>
+        <p class="net-hint">Per ESP-NOW (direkt von ESP zu ESP). Der Master sendet Beat, Tempo, Effekt, Farben,
+            Palette, Blackout, Strobe und Drops; Slaves übernehmen das für ihre eigenen Lampen. Alle Controller
+            müssen im <b>selben WLAN</b> sein und die gleiche Gruppe haben. Fällt der Master aus, arbeitet ein
+            Slave nach 1,5 s wieder selbstständig.</p>
+    </div>
+
+    <div class="card">
+        <h2>MQTT / Home Assistant</h2>
+        <label class="net-row"><input type="checkbox" id="mqttOn"> MQTT verwenden</label>
+        <div class="net-grid">
+            <label>Broker (IP/Name)<input type="text" id="mqttHost" placeholder="z. B. 192.168.178.10"></label>
+            <label>Port<input type="number" id="mqttPort" value="1883"></label>
+            <label>Benutzer<input type="text" id="mqttUser" autocomplete="off"></label>
+            <label>Passwort<input type="password" id="mqttPass" placeholder="unverändert" autocomplete="new-password"></label>
+            <label>Topic<input type="text" id="mqttTopic" value="dmxcontroller"></label>
+        </div>
+        <button class="btn-save" style="width:100%; margin-top:12px;" onclick="saveMqtt()">MQTT speichern</button>
+        <p class="net-hint">Status: <b id="mqttState">–</b><br>
+            Home Assistant findet den Controller automatisch (MQTT-Discovery): als Licht (an/aus = Blackout,
+            Helligkeit = Master, Farbe, Effekte), Preset-Auswahl und BPM-Sensor. Voraussetzung ist ein MQTT-Broker,
+            z. B. das Mosquitto-Add-on in Home Assistant.</p>
+    </div>
+
     <div class="card" style="border: 1px solid #451a1a; margin-top: 40px;">
         <h2 style="color: #ff5252;">Gefahrenzone</h2>
         <p style="color: #888; font-size: 0.85em;">Löscht die gespeicherten WLAN-Daten. Der Controller startet danach im Access-Point-Modus neu.</p>
@@ -60,7 +101,59 @@
 
 </div>
 
+<style>
+    .net-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 8px; font-size: 14px; }
+    .net-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; margin-top: 10px; font-size: 13px; }
+    .net-grid label { display: flex; flex-direction: column; gap: 4px; }
+    .net-grid input, .net-row select { padding: 8px; background: #2a2a2a; color: #eee; border: 1px solid #444; border-radius: 6px; }
+    .net-hint { font-size: 12px; color: #888; }
+</style>
 <script>
+// --- Sync + MQTT ---
+function loadNet() {
+    fetch("/api/getConfig").then(r => r.json()).then(cfg => {
+        const s = cfg.syncCfg || {};
+        document.getElementById("syncRole").value = String(s.role || 0);
+        document.getElementById("syncGroup").value = String(s.group || 1);
+        const m = cfg.mqttCfg || {};
+        document.getElementById("mqttOn").checked = !!m.on;
+        document.getElementById("mqttHost").value = m.host || "";
+        document.getElementById("mqttPort").value = m.port || 1883;
+        document.getElementById("mqttUser").value = m.user || "";
+        document.getElementById("mqttPass").placeholder = m.hasPass ? "unverändert" : "kein Passwort";
+        document.getElementById("mqttTopic").value = m.topic || "dmxcontroller";
+    });
+}
+
+function saveSync() {
+    const role = document.getElementById("syncRole").value;
+    const group = document.getElementById("syncGroup").value;
+    fetch(`/api/settings?syncRole=${role}&syncGroup=${group}`);
+}
+
+function saveMqtt() {
+    const v = id => encodeURIComponent(document.getElementById(id).value.trim());
+    let q = `mqttOn=${document.getElementById("mqttOn").checked ? 1 : 0}&mqttHost=${v("mqttHost")}` +
+            `&mqttPort=${v("mqttPort")}&mqttUser=${v("mqttUser")}&mqttTopic=${v("mqttTopic")}`;
+    const pass = document.getElementById("mqttPass").value;
+    if (pass) q += "&mqttPass=" + encodeURIComponent(pass);   // leer = Passwort nicht ändern
+    fetch("/api/settings?" + q).then(r => {
+        document.getElementById("mqttPass").value = "";
+        alert(r.ok ? "MQTT gespeichert – der Controller verbindet sich neu." : "Fehler beim Speichern.");
+        loadNet();
+    });
+}
+
+function pollMqtt() {
+    if (document.hidden) return;
+    fetch("/api/status").then(r => r.json()).then(st => {
+        const on = document.getElementById("mqttOn").checked;
+        document.getElementById("mqttState").textContent = !on ? "aus" : (st.mqtt ? "verbunden ✓" : "nicht verbunden");
+    }).catch(() => {});
+}
+loadNet();
+setInterval(pollMqtt, 3000);
+
 /**
  * Scannt nach Netzwerken
  */

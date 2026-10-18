@@ -9,6 +9,7 @@
 #define NVS_CONFIG_KEY  "config"
 #define NVS_PRESETS_KEY "presets"
 #define NVS_CUES_KEY    "cues"
+#define NVS_CHASES_KEY  "chases"
 #define LEGACY_CONFIG   "/config.json"   // alter Speicherort, wird einmalig übernommen
 
 ControllerState state;
@@ -315,14 +316,17 @@ static bool writeConfigToNVS(JsonDocument &doc) {
         Serial.println("Fehler: NVS konnte nicht geöffnet werden");
         return false;
     }
-    JsonDocument presets, cues;
+    JsonDocument presets, cues, chases;
     presets.set(doc["presets"]);
     cues.set(doc["cues"]);
+    chases.set(doc["chases"]);
     doc.remove("presets");
     doc.remove("cues");
+    doc.remove("chases");
 
     bool ok = putJson(prefs, NVS_PRESETS_KEY, presets.as<JsonVariantConst>());
     ok = putJson(prefs, NVS_CUES_KEY, cues.as<JsonVariantConst>()) && ok;
+    ok = putJson(prefs, NVS_CHASES_KEY, chases.as<JsonVariantConst>()) && ok;
     ok = putJson(prefs, NVS_CONFIG_KEY, doc.as<JsonVariantConst>()) && ok;
     size_t freeEntries = prefs.freeEntries();
     prefs.end();
@@ -355,6 +359,7 @@ bool importConfigJson(const char *json, size_t len, String &error) {
     // WLAN-Daten des Geräts behalten (sind im Backup nicht enthalten)
     doc["wifi_ssid"] = state.wifi_ssid;
     doc["wifi_pass"] = state.wifi_pass;
+    doc["mqtt"]["pass"] = state.mqttPass;
 
     if (!writeConfigToNVS(doc)) {
         error = "Speichern fehlgeschlagen";
@@ -423,6 +428,7 @@ static void buildConfigDoc(JsonDocument &doc, bool includeWifi) {
         if (p.fadeMs >= 0) o["fade"] = p.fadeMs;
         o["w"] = p.fxWidth;
         o["i"] = p.fxIntensity;
+        if (p.energy) o["e"] = p.energy;
         if (p.hasGroups) {
             // Kompakt: Gruppen/Palette nur speichern, wenn sie benutzt werden (NVS ist klein)
             o["v2"] = true;
@@ -462,6 +468,42 @@ static void buildConfigDoc(JsonDocument &doc, bool includeWifi) {
         for (auto &h : pos.heads) {
             JsonObject ho = heads.add<JsonObject>();
             ho["f"] = h.fixture; ho["p"] = h.pan; ho["t"] = h.tilt;
+        }
+    }
+
+    // Intelligente Auto-Show, Sync, MQTT
+    doc["autoShowSmart"] = state.autoShowSmart;
+    JsonObject sync = doc["sync"].to<JsonObject>();
+    sync["role"]  = state.syncRole;
+    sync["group"] = state.syncGroup;
+    JsonObject mqtt = doc["mqtt"].to<JsonObject>();
+    mqtt["on"]    = state.mqttOn;
+    mqtt["host"]  = state.mqttHost;
+    mqtt["port"]  = state.mqttPort;
+    mqtt["user"]  = state.mqttUser;
+    if (includeWifi) mqtt["pass"] = state.mqttPass;   // Passwort nicht ins Backup
+    mqtt["topic"] = state.mqttTopic;
+
+    // Eigene Lauflichter
+    JsonArray chases = doc["chases"].to<JsonArray>();
+    for (int c = 0; c < USER_CHASES; c++) {
+        const UserChase &uc = state.userChases[c];
+        JsonObject o = chases.add<JsonObject>();
+        if (uc.name.isEmpty()) continue;
+        o["name"]   = uc.name;
+        o["w"]      = uc.width;
+        o["s"]      = uc.steps;
+        o["smooth"] = uc.smooth;
+        // Kompakt: pro Schritt ein String "rrggbbrrggbb…"
+        JsonArray rows = o["rows"].to<JsonArray>();
+        for (int st = 0; st < uc.steps; st++) {
+            String row;
+            for (int x = 0; x < uc.width; x++) {
+                char hex[7];
+                snprintf(hex, sizeof(hex), "%06lx", (unsigned long)(uc.cells[st][x] & 0xFFFFFF));
+                row += hex;
+            }
+            rows.add(row);
         }
     }
 
@@ -557,7 +599,7 @@ static bool readConfigFromNVS(JsonDocument &doc) {
     }
 
     // Presets und Cue-Liste liegen in eigenen Einträgen (ältere Stände: in "config")
-    const char *keys[2] = {NVS_PRESETS_KEY, NVS_CUES_KEY};
+    const char *keys[3] = {NVS_PRESETS_KEY, NVS_CUES_KEY, NVS_CHASES_KEY};
     for (const char *key : keys) {
         if (!ok || doc[key].is<JsonArray>()) continue;
         size_t n = prefs.getBytesLength(key);
@@ -669,6 +711,7 @@ void loadConfig() {
         p.fadeMs     = o["fade"].is<int>() ? constrain((int)o["fade"], 0, 10000) : -1;
         p.fxWidth    = constrain((int)(o["w"] | 1), 1, 8);
         p.fxIntensity = constrain((int)(o["i"] | 50), 0, 100);
+        p.energy     = constrain((int)(o["e"] | 0), 0, 3);
         if ((o["v2"] | false) || o["groups"].is<JsonArray>()) {
             p.hasGroups = true;   // fehlende Gruppen/Palette = nicht benutzt (custom/on = false)
             groupsFromJson(o["groups"].as<JsonArray>(), p.groups);
@@ -707,6 +750,40 @@ void loadConfig() {
             pos.heads.push_back({h["f"] | "", (uint8_t)(h["p"] | 128), (uint8_t)(h["t"] | 128)});
         }
         state.positions.push_back(pos);
+    }
+
+    // Intelligente Auto-Show, Sync, MQTT
+    state.autoShowSmart = doc["autoShowSmart"] | false;
+    JsonObject sync = doc["sync"].as<JsonObject>();
+    state.syncRole  = constrain((int)(sync["role"] | 0), 0, 2);
+    state.syncGroup = constrain((int)(sync["group"] | 1), 1, 9);
+    JsonObject mqtt = doc["mqtt"].as<JsonObject>();
+    state.mqttOn    = mqtt["on"]    | false;
+    state.mqttHost  = mqtt["host"]  | "";
+    state.mqttPort  = constrain((int)(mqtt["port"] | 1883), 1, 65535);
+    state.mqttUser  = mqtt["user"]  | "";
+    if (mqtt["pass"].is<const char*>()) state.mqttPass = mqtt["pass"].as<String>();
+    state.mqttTopic = mqtt["topic"] | "dmxcontroller";
+
+    // Eigene Lauflichter
+    int ci = 0;
+    for (JsonObject o : doc["chases"].as<JsonArray>()) {
+        if (ci >= USER_CHASES) break;
+        UserChase &uc = state.userChases[ci++];
+        uc = UserChase();
+        uc.name   = o["name"] | "";
+        uc.width  = constrain((int)(o["w"] | 4), 1, USER_CHASE_WIDTH);
+        uc.steps  = constrain((int)(o["s"] | 4), 1, USER_CHASE_STEPS);
+        uc.smooth = o["smooth"] | false;
+        int st = 0;
+        for (JsonVariant rv : o["rows"].as<JsonArray>()) {
+            if (st >= USER_CHASE_STEPS) break;
+            String row = rv.as<String>();
+            for (int x = 0; x < uc.width && (x + 1) * 6 <= (int)row.length(); x++) {
+                uc.cells[st][x] = strtoul(row.substring(x * 6, x * 6 + 6).c_str(), NULL, 16);
+            }
+            st++;
+        }
     }
 
     // Zeitplan, Display

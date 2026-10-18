@@ -9,6 +9,7 @@
 #include "netinput.h"
 #include "audio.h"
 #include "schedule.h"
+#include "mqtt.h"
 
 // Definition des Webservers
 AsyncWebServer server(80);  
@@ -84,6 +85,10 @@ String buildStatusJson(bool beat) {
     doc["netActive"] = netInputActive();
     doc["standby"]   = state.standbyActive;
     doc["scheduleDark"] = state.scheduleDark && !state.scheduleOverride;
+    doc["energy"]    = state.musicEnergy;
+    doc["sync"]      = state.syncRole;
+    doc["syncRx"]    = state.syncReceiving;
+    doc["mqtt"]      = state.mqttConnected;
     doc["cueRunning"] = state.cueRunning;
     doc["cueIndex"]  = state.cueIndex;
     unsigned long now = millis();
@@ -134,6 +139,7 @@ static void presetToJson(JsonArray arr, int id, const Preset &p) {
     o["color"]  = hex;
     o["speed"]  = p.timerSpeed;
     o["master"] = p.master;
+    o["energy"] = p.energy;
 }
 
 void setupWeb() {
@@ -242,6 +248,21 @@ void setupWeb() {
         if (req->hasParam("schedulePreset"))        state.schedulePreset = param("schedulePreset");
         if ((v = param("displayOffMin")).length())  state.displayOffMin = constrain(v.toInt(), 0, 240);
 
+        // Intelligente Auto-Show, Sync
+        if ((v = param("autoShowSmart")).length())  state.autoShowSmart = v.toInt() != 0;
+        if ((v = param("syncRole")).length())       state.syncRole = constrain(v.toInt(), 0, 2);
+        if ((v = param("syncGroup")).length())      state.syncGroup = constrain(v.toInt(), 1, 9);
+
+        // MQTT (Passwort nur ändern, wenn mitgeschickt)
+        bool mqttChanged = false;
+        if ((v = param("mqttOn")).length())         { state.mqttOn = v.toInt() != 0; mqttChanged = true; }
+        if (req->hasParam("mqttHost"))              { state.mqttHost = param("mqttHost"); mqttChanged = true; }
+        if ((v = param("mqttPort")).length())       { state.mqttPort = constrain(v.toInt(), 1, 65535); mqttChanged = true; }
+        if (req->hasParam("mqttUser"))              { state.mqttUser = param("mqttUser"); mqttChanged = true; }
+        if (req->hasParam("mqttPass"))              { state.mqttPass = param("mqttPass"); mqttChanged = true; }
+        if ((v = param("mqttTopic")).length())      { state.mqttTopic = v; mqttChanged = true; }
+        if (mqttChanged) mqttReconfigure();
+
         bool netChanged = false;
         if ((v = param("netInput")).length())    { state.netInput = v.toInt() != 0; netChanged = true; }
         if ((v = param("netUniverse")).length()) { state.netUniverse = constrain(v.toInt(), 1, 32768); netChanged = true; }
@@ -303,6 +324,96 @@ void setupWeb() {
     // API: Zeitplan "aus" überstimmen (Licht jetzt an, bis zum nächsten Wechsel)
     server.on("/api/scheduleOverride", HTTP_GET, [](AsyncWebServerRequest *req){
         state.scheduleOverride = !req->hasParam("on") || req->getParam("on")->value().toInt() != 0;
+        req->send(200, "text/plain", "OK");
+    });
+
+    // API: Lampe finden – Fixture id blinkt 5 s weiß (id=-1 beendet)
+    server.on("/api/identify", HTTP_GET, [](AsyncWebServerRequest *req){
+        int id = req->hasParam("id") ? req->getParam("id")->value().toInt() : -1;
+        state.identifyIndex = id;
+        state.identifyUntil = millis() + 5000;
+        req->send(200, "text/plain", "OK");
+    });
+
+    // API: Kanaltest – ch=1..512, v=0..255 (endet 2 Min nach der letzten Änderung)
+    server.on("/api/testChannel", HTTP_GET, [](AsyncWebServerRequest *req){
+        int ch = req->hasParam("ch") ? req->getParam("ch")->value().toInt() : 0;
+        if (ch < 1 || ch > 512 || !req->hasParam("v")) { req->send(400, "text/plain", "Error"); return; }
+        state.testVal[ch - 1] = constrain(req->getParam("v")->value().toInt(), 0, 255);
+        state.testMask[ch - 1] = true;
+        state.testUntil = millis() + 120000;
+        req->send(200, "text/plain", "OK");
+    });
+
+    server.on("/api/testClear", HTTP_GET, [](AsyncWebServerRequest *req){
+        memset(state.testMask, 0, sizeof(state.testMask));
+        state.testUntil = 0;
+        req->send(200, "text/plain", "OK");
+    });
+
+    // API: Energie eines Presets für die intelligente Auto-Show (0 egal, 1 ruhig, 2 mittel, 3 wild)
+    server.on("/api/presetEnergy", HTTP_GET, [](AsyncWebServerRequest *req){
+        int id = req->hasParam("id") ? req->getParam("id")->value().toInt() : -1;
+        int e = req->hasParam("e") ? req->getParam("e")->value().toInt() : 0;
+        StateLock lock;
+        if (id < 0 || id >= (int)state.presets.size()) { req->send(400, "text/plain", "Error"); return; }
+        state.presets[id].energy = constrain(e, 0, 3);
+        markConfigDirty();
+        req->send(200, "text/plain", "OK");
+    });
+
+    // --- Eigene Lauflichter ---
+    server.on("/api/chases", HTTP_GET, [](AsyncWebServerRequest *req){
+        StateLock lock;
+        JsonDocument doc;
+        JsonArray arr = doc.to<JsonArray>();
+        for (int c = 0; c < USER_CHASES; c++) {
+            const UserChase &uc = state.userChases[c];
+            JsonObject o = arr.add<JsonObject>();
+            o["name"]   = uc.name;
+            o["width"]  = uc.width;
+            o["steps"]  = uc.steps;
+            o["smooth"] = uc.smooth;
+            JsonArray cells = o["cells"].to<JsonArray>();
+            for (int st = 0; st < USER_CHASE_STEPS; st++)
+                for (int x = 0; x < USER_CHASE_WIDTH; x++) {
+                    char hex[8];
+                    snprintf(hex, sizeof(hex), "#%06lx", (unsigned long)(uc.cells[st][x] & 0xFFFFFF));
+                    cells.add(hex);
+                }
+        }
+        String json;
+        serializeJson(doc, json);
+        req->send(200, "application/json", json);
+    });
+
+    // Lauflicht speichern: slot=1..4, Body {name, width, steps, smooth, cells:[16×8 "#rrggbb"]}
+    server.on("/api/saveChase", HTTP_POST, [](AsyncWebServerRequest *req){}, NULL,
+    [](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total){
+        const char *body = collectBody(req, data, len, index, total);
+        if (!body) return;
+        int slot = req->hasParam("slot") ? req->getParam("slot")->value().toInt() - 1 : -1;
+        JsonDocument doc;
+        if (slot < 0 || slot >= USER_CHASES || deserializeJson(doc, body, total)) {
+            req->send(400, "text/plain", "Fehler");
+            return;
+        }
+        StateLock lock;
+        UserChase &uc = state.userChases[slot];
+        uc = UserChase();
+        uc.name   = String(doc["name"] | "").substring(0, 20);
+        uc.width  = constrain((int)(doc["width"] | 4), 1, USER_CHASE_WIDTH);
+        uc.steps  = constrain((int)(doc["steps"] | 4), 1, USER_CHASE_STEPS);
+        uc.smooth = doc["smooth"] | false;
+        int i = 0;
+        for (JsonVariant v : doc["cells"].as<JsonArray>()) {
+            if (i >= USER_CHASE_STEPS * USER_CHASE_WIDTH) break;
+            String hex = v.as<String>();
+            if (hex.startsWith("#")) hex = hex.substring(1);
+            uc.cells[i / USER_CHASE_WIDTH][i % USER_CHASE_WIDTH] = strtoul(hex.c_str(), NULL, 16);
+            i++;
+        }
+        markConfigDirty();
         req->send(200, "text/plain", "OK");
     });
 
@@ -788,6 +899,19 @@ void setupWeb() {
         sched["preset"] = state.schedulePreset;
         sched["time"]   = currentTimeString();   // leer = noch keine Uhrzeit
         doc["displayOffMin"] = state.displayOffMin;
+        doc["autoShowSmart"] = state.autoShowSmart;
+        JsonObject sync = doc["syncCfg"].to<JsonObject>();
+        sync["role"]  = state.syncRole;
+        sync["group"] = state.syncGroup;
+        JsonObject mq = doc["mqttCfg"].to<JsonObject>();
+        mq["on"]      = state.mqttOn;
+        mq["host"]    = state.mqttHost;
+        mq["port"]    = state.mqttPort;
+        mq["user"]    = state.mqttUser;
+        mq["hasPass"] = state.mqttPass.length() > 0;   // Passwort selbst nie ausliefern
+        mq["topic"]   = state.mqttTopic;
+        JsonArray chases = doc["userChases"].to<JsonArray>();
+        for (int c = 0; c < USER_CHASES; c++) chases.add(state.userChases[c].name);
         doc["ip"]           = WiFi.isConnected() ? WiFi.localIP().toString() : WiFi.softAPIP().toString();
         String json;
         serializeJson(doc, json);
@@ -1024,6 +1148,7 @@ void setupWeb() {
     server.on("/dmxconfig", HTTP_GET, [](AsyncWebServerRequest *req){ req->send(LittleFS, "/dmxconfig.html", "text/html"); });
     server.on("/mh", HTTP_GET, [](AsyncWebServerRequest *req){ req->send(LittleFS, "/moving_head.html", "text/html"); });
     server.on("/monitor", HTTP_GET, [](AsyncWebServerRequest *req){ req->send(LittleFS, "/monitor.html", "text/html"); });
+    server.on("/lauflicht", HTTP_GET, [](AsyncWebServerRequest *req){ req->send(LittleFS, "/lauflicht.html", "text/html"); });
 
     setupOTA(); // Update-Seite /update + ArduinoOTA
 

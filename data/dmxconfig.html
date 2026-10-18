@@ -15,6 +15,7 @@
     <a href="/wifi">WLAN</a>
     <a href="/dmxconfig" class="active">DMX</a>
     <a href="/mh">Moving Head</a>
+    <a href="/lauflicht">Lauflicht</a>
     <a href="/monitor">Monitor</a>
     <a href="/update">Update</a>
 </div>
@@ -56,6 +57,10 @@
     </table>
 
     <h3>Neuen Typ hinzufügen</h3>
+    <div style="margin-bottom:8px;">
+        Vorlage: <select id="typeTemplate" onchange="applyTemplate()"></select>
+        <div style="font-size:12px; color:#888; margin-top:4px;">Typische Kanalbelegungen – bitte mit der Anleitung deiner Lampe vergleichen und bei Bedarf anpassen. Offsets zählen ab 0.</div>
+    </div>
     <input id="tName" placeholder="Typname">
     <input id="tChannels" type="number" placeholder="Kanäle">
     <input id="tDim" type="number" placeholder="Dimmer">
@@ -232,7 +237,8 @@ function renderFixtures() {
                     `).join("")}
                 </select>
             </td>
-            <td><button onclick="deleteFixture(${i})">Löschen</button></td>
+            <td><button onclick="identify(${i})" title="Lampe blinkt 5 s">Finden</button>
+                <button onclick="deleteFixture(${i})">Löschen</button></td>
         `;
         tbody.appendChild(row);
     });
@@ -281,6 +287,47 @@ function readOffset(id) {
 }
 
 function fmtOff(v) { return (v === undefined || v < 0) ? "–" : v; }
+
+// Typische Belegungen (Offsets ab 0, null = nicht vorhanden)
+const TEMPLATES = [
+    { label: "RGB, 3 Kanäle (R, G, B)", name: "RGB3", ch: 3, R: 0, G: 1, B: 2 },
+    { label: "RGBW, 4 Kanäle (R, G, B, W)", name: "RGBW4", ch: 4, R: 0, G: 1, B: 2, W: 3 },
+    { label: "Dimmer + RGB, 4 Kanäle", name: "DRGB4", ch: 4, D: 0, R: 1, G: 2, B: 3 },
+    { label: "RGB + Dimmer, 4 Kanäle", name: "RGBD4", ch: 4, R: 0, G: 1, B: 2, D: 3 },
+    { label: "Dimmer + RGBW, 5 Kanäle", name: "DRGBW5", ch: 5, D: 0, R: 1, G: 2, B: 3, W: 4 },
+    { label: "PAR 6 Kanäle (Dimmer, R, G, B, Strobe, Modus)", name: "PAR6", ch: 6, D: 0, R: 1, G: 2, B: 3 },
+    { label: "PAR 7 Kanäle (Dimmer, R, G, B, W, Strobe, Modus)", name: "PAR7", ch: 7, D: 0, R: 1, G: 2, B: 3, W: 4 },
+    { label: "PAR 8 Kanäle (Dimmer, R, G, B, W, Amber, UV, Strobe)", name: "PAR8", ch: 8, D: 0, R: 1, G: 2, B: 3, W: 4 },
+    { label: "Moving Head Spot 9 Kanäle (Pan, Tilt, Farbrad, Gobo, Strobe, Dimmer, Speed, Auto, Reset)",
+      name: "SPOT9", ch: 9, Pan: 0, Tilt: 1, Color: 2, Gobo: 3, D: 5 },
+    { label: "Moving Head Spot 11 Kanäle (Pan, Tilt, Pan fein, Tilt fein, Speed, Farbrad, Gobo, Strobe, Dimmer, Prisma, Fokus)",
+      name: "SPOT11", ch: 11, Pan: 0, Tilt: 1, Color: 5, Gobo: 6, D: 8, Prism: 9, Focus: 10 },
+    { label: "Moving Head Wash 14 Kanäle (Pan, Pan fein, Tilt, Tilt fein, Speed, Dimmer, Strobe, R, G, B, W, …)",
+      name: "WASH14", ch: 14, Pan: 0, Tilt: 2, D: 5, R: 7, G: 8, B: 9, W: 10 },
+];
+
+function fillTemplates() {
+    const sel = document.getElementById("typeTemplate");
+    sel.innerHTML = "";
+    sel.appendChild(new Option("– eigene Belegung –", ""));
+    TEMPLATES.forEach((t, i) => sel.appendChild(new Option(t.label, i)));
+}
+
+function applyTemplate() {
+    const i = document.getElementById("typeTemplate").value;
+    if (i === "") return;
+    const t = TEMPLATES[i];
+    const set = (id, v) => document.getElementById(id).value = (v === undefined || v === null) ? "" : v;
+    set("tName", t.name); set("tChannels", t.ch);
+    set("tDim", t.D); set("tR", t.R); set("tG", t.G); set("tB", t.B); set("tW", t.W);
+    set("tPan", t.Pan); set("tTilt", t.Tilt);
+    set("tGobo", t.Gobo); set("tColorWheel", t.Color); set("tPrism", t.Prism); set("tFocus", t.Focus);
+}
+
+function identify(i) {
+    // Lampe muss gespeichert sein (Index wie auf dem Controller)
+    fetch("/api/identify?id=" + i);
+}
 
 function addType() {
     const name = document.getElementById("tName").value;
@@ -355,6 +402,7 @@ async function saveConfig() {
 }
 
 
+fillTemplates();
 loadConfig();
 </script>
 </body>
