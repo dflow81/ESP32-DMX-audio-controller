@@ -176,7 +176,7 @@ static void handleFog(bool newDrop) {
 }
 
 static bool isAudioEffect(const String &fx) {
-    return fx == "disco" || fx == "disco2" || fx == "retro";
+    return fx == "disco" || fx == "disco2" || fx == "lightorgan" || fx == "retro";
 }
 
 // Ein Bild der normalen Effekt-Steuerung berechnen und senden.
@@ -248,11 +248,7 @@ void effectTask(void *param) {
             // gedreht wurde und speichert dann einmalig den Flash-Speicher.
             if (!state.otaActive) handleAutoSave(); 
 
-            // DMX-Schnittstelle neu starten, wenn die Web-UI die Config geändert hat
-            if (state.dmxReinit) {
-                state.dmxReinit = false;
-                setupDMX();
-            }
+            uint32_t t0 = micros(); // Rechenzeit des Bildes messen
 
             // --- BEAT ---
             // Der Audio-Task zählt Kicks hoch; so geht kein Beat verloren
@@ -290,6 +286,7 @@ void effectTask(void *param) {
                 }
                 delayTime = runEffectFrame(dropReaction, wasStrobing);
             }
+            recordLoad(loadStats.effectUs, loadStats.effectMaxUs, micros() - t0);
         }
         vTaskDelay(pdMS_TO_TICKS(max(10, delayTime)));
     }
@@ -309,22 +306,22 @@ void setup() {
     setupWeb(); 
     setupNetInput(); // Art-Net / sACN, falls eingeschaltet
 
-    // Audio Task auf CORE 0
-    xTaskCreatePinnedToCore(taskAudio, "AudioTask", 10240, NULL, 2, NULL, 0);
+    // Core 0: Audio (+ WLAN-Stack, Display)
+    xTaskCreatePinnedToCore(taskAudio, "AudioTask", 10240, NULL, PRIO_AUDIO, &loadStats.audioTask, CORE_AUDIO);
+    startDisplayTask();
 
-    // Effekt Task auf CORE 1 (beinhaltet nun auch AutoSave)
-    xTaskCreatePinnedToCore(effectTask, "effectTask", 6144, NULL, 1, NULL, 1);
+    // Core 1: Effekte (+ DMX-Senden, Webserver, loop). Beinhaltet auch das AutoSave.
+    xTaskCreatePinnedToCore(effectTask, "effectTask", 6144, NULL, PRIO_EFFECT, &loadStats.effectTask, CORE_LIGHT);
 
     Serial.println("System ready.");
 }
 
 void loop() {
     // Effekte und Audio laufen in eigenen FreeRTOS-Tasks;
-    // die Loop kümmert sich um WLAN, OTA-Updates, Display und geplante Neustarts
+    // die Loop (Core 1) kümmert sich um WLAN, OTA-Updates, WebSocket und geplante Neustarts
     handleWiFi();
     handleOTA();
     handleLiveStatus();
-    handleDisplay();
 
     if (restartAt && (long)(millis() - restartAt) >= 0) {
         StateLock lock; // wartet, bis ein laufender Speichervorgang fertig ist

@@ -11,11 +11,11 @@
 
 <!-- NAVIGATION -->
 <div class="nav">
-    <img src="/logo.svg" style="height:32px; width:auto; margin-right:15px; vertical-align:middle;">
+    <img src="/logo.svg" class="nav-logo" alt="">
     <a href="/" class="active">Home</a>
     <a href="/wifi">WLAN</a>
     <a href="/dmxconfig">DMX</a>
-    <a href="/mh" >Moving Head</a>
+    <a href="/mh">Moving Head</a>
     <a href="/monitor">Monitor</a>
     <a href="/update">Update</a>
 </div>
@@ -154,6 +154,10 @@
                 <option value="2">2 Farben</option>
                 <option value="3" selected>3 Farben</option>
                 <option value="4">4 Farben</option>
+                <option value="5">5 Farben</option>
+                <option value="6">6 Farben</option>
+                <option value="7">7 Farben</option>
+                <option value="8">8 Farben</option>
             </select>
         </div>
         <div class="palette-row">
@@ -161,6 +165,10 @@
             <input type="color" id="pal1" value="#0000ff" onchange="savePalette()">
             <input type="color" id="pal2" value="#ff00ff" onchange="savePalette()">
             <input type="color" id="pal3" value="#00ffff" onchange="savePalette()">
+            <input type="color" id="pal4" value="#ffff00" onchange="savePalette()">
+            <input type="color" id="pal5" value="#00ff00" onchange="savePalette()">
+            <input type="color" id="pal6" value="#ff8000" onchange="savePalette()">
+            <input type="color" id="pal7" value="#ffffff" onchange="savePalette()">
         </div>
     </div>
 
@@ -233,8 +241,11 @@ const effects = [
     "fire", "candle", "aurora", "ocean", "sunset",
     "fullstrobe", "randomstrobe",
     "dimmerwave", "dimmerchase", "dimmerbounce",
-    "disco","disco2", "retro"
+    "disco","disco2", "lightorgan"
 ];
+// Anzeigenamen, wo sie vom internen Namen abweichen
+const effectLabels = { lightorgan: "light organ" };
+const effectLabel = e => effectLabels[e] || e;
 
 const canvas = document.getElementById('colorCanvas');
 const ctx = canvas.getContext('2d');
@@ -533,6 +544,7 @@ function calStep(step) {
 }
 
 // --- Farbpalette ---
+const PALETTE_MAX = 8;
 function showPalette(p) {
     document.getElementById("paletteOn").checked = !!p.on;
     document.getElementById("paletteSize").value = String(p.size);
@@ -542,14 +554,14 @@ function showPalette(p) {
 
 function updatePaletteUi() {
     const n = parseInt(document.getElementById("paletteSize").value);
-    for (let i = 0; i < 4; i++) document.getElementById("pal" + i).style.display = i < n ? "" : "none";
+    for (let i = 0; i < PALETTE_MAX; i++) document.getElementById("pal" + i).style.display = i < n ? "" : "none";
 }
 
 function savePalette() {
     updatePaletteUi();
     const on = document.getElementById("paletteOn").checked ? 1 : 0;
     const n = document.getElementById("paletteSize").value;
-    const cols = [0, 1, 2, 3].map(i => document.getElementById("pal" + i).value).join(",");
+    const cols = [...Array(PALETTE_MAX).keys()].map(i => document.getElementById("pal" + i).value).join(",");
     fetch(`/api/settings?paletteOn=${on}&paletteSize=${n}&palette=${encodeURIComponent(cols)}`);
 }
 
@@ -584,7 +596,7 @@ function showGroups(groups, fixtures) {
         customLbl.append(custom, " eigener Effekt");
 
         const eff = document.createElement("select");
-        ["none"].concat(effects).forEach(e => eff.appendChild(new Option(e === "none" ? "aus" : e, e)));
+        ["none"].concat(effects).forEach(e => eff.appendChild(new Option(e === "none" ? "aus" : effectLabel(e), e)));
         eff.value = g.effect || "static";
 
         const col = document.createElement("input");
@@ -796,13 +808,13 @@ function setTimer() {
 function buildEffectButtons() {
     const container = document.getElementById("effectButtons");
     container.innerHTML = effects.map(e => 
-        `<button id="btn-${e}" class="effect-btn" onclick="setEffect('${e}')">${e}</button>`
+        `<button id="btn-${e}" class="effect-btn" onclick="setEffect('${e}')">${effectLabel(e)}</button>`
     ).join("");
 }
 
 function setEffect(name, sendRequest = true) {
     if(sendRequest) fetch("/api/setEffect?name=" + name);
-    document.getElementById("activeEffect").textContent = name;
+    document.getElementById("activeEffect").textContent = effectLabel(name);
     
     // Alle Buttons zurücksetzen
     document.querySelectorAll(".effect-btn").forEach(btn => btn.classList.remove("active"));

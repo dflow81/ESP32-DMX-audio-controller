@@ -31,7 +31,7 @@ void effectDimmerBounce();
 // Neue Audio-Effekte
 void effectDisco();
 void effectDisco2();
-void effectRetro();
+void effectLightOrgan();   // Lichtorgel (früher "retro")
 
 // Manueller Strobe (Knopf in der Web-UI), überschreibt den laufenden Effekt
 void effectManualStrobe();

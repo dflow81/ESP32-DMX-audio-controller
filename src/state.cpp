@@ -12,6 +12,7 @@
 #define LEGACY_CONFIG   "/config.json"   // alter Speicherort, wird einmalig übernommen
 
 ControllerState state;
+LoadStats loadStats;
 SemaphoreHandle_t stateMutex = nullptr;
 
 const char* const EXTRA_NAMES[EXTRA_COUNT]       = {"gobo", "colorWheel", "prism", "focus"};
@@ -654,6 +655,15 @@ void loadConfig() {
     state.refSnare   = cal["refSnare"]  | 190000.0;
     state.refHihat   = cal["refHihat"]  | 170000.0;
     state.refLevel   = cal["refLevel"]  | 5000.0;
+
+    // Effekt "retro" heißt jetzt "lightorgan" – gespeicherte Namen umstellen
+    auto rename = [](String &e) { if (e == "retro") e = "lightorgan"; };
+    rename(state.currentEffect);
+    for (auto &p : state.presets) {
+        rename(p.effect);
+        for (auto &g : p.groups) rename(g.effect);
+    }
+    for (auto &g : state.groups) rename(g.effect);
 
     updateDMXChannelCount();
 

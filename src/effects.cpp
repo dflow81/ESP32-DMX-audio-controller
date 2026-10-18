@@ -77,6 +77,22 @@ static double stepPos() {
 
 // Aktueller Schritt (für Chase, Bounce …) und Fortschritt innerhalb des Schritts (0…1)
 static long   stepIndex() { return (long)stepPos(); }
+
+// Auslöser für Farbwechsel der Disco-Effekte:
+// "Im Takt" an → bei jedem neuen Effekt-Schritt (½ / 1 / 2 Beats, wie eingestellt),
+// sonst wie bisher bei jedem erkannten Beat. Merkt sich den Schritt je Effekt und Slot.
+static bool colorChangeDue(int effectId) {
+    static long lastStep[2][GROUP_COUNT + 1];
+    static bool init = false;
+    if (!init) { for (auto &row : lastStep) for (long &v : row) v = -1; init = true; }
+
+    if (!(state.beatSync && state.bpm >= 30)) return state.beat;
+    long step = stepIndex();
+    long &last = lastStep[effectId][ctx.slot];
+    if (step == last) return false;
+    last = step;
+    return true;
+}
 static double stepPhase() { double p = stepPos(); return p - floor(p); }
 
 // Zeitfaktor für die Wellen-Effekte (gleiche Einheit wie bisher: Schritte)
@@ -384,8 +400,8 @@ void effectDisco() {
     static uint8_t color[GROUP_COUNT + 1][3] = {{255, 0, 0}};
     uint8_t *c = color[ctx.slot];
 
-    // --- NORMALER DISCO BEAT ---
-    if (state.beat) {
+    // --- NORMALER DISCO BEAT (bzw. Schritt, wenn "Im Takt" an ist) ---
+    if (colorChangeDue(0)) {
         // Bei jedem Schlag eine neue Zufallsfarbe für alle (mit Palette: aus der Palette)
         if (state.palette.on) paletteRandom(c[0], c[1], c[2]);
         else { c[0] = random(0, 255); c[1] = random(0, 255); c[2] = random(0, 255); }
@@ -421,8 +437,8 @@ void effectDisco2() {
     bool own = state.palette.on;
     int count = own ? constrain((int)state.palette.size, 2, PALETTE_MAX) : 8;
 
-    // --- NORMALER BEAT (Farbwechsel) ---
-    if (state.beat) {
+    // --- NORMALER BEAT (Farbwechsel; bzw. Schritt, wenn "Im Takt" an ist) ---
+    if (colorChangeDue(1)) {
         for (int i = 0; i < fxCount(); i++) {
             fixtureColorIdx[fxGlobal(i)] = random(0, count); // Neue Zufallsfarbe aus Palette
         }
@@ -439,7 +455,8 @@ void effectDisco2() {
 
 //
 // --------------------------------------------------
-void effectRetro() {
+// LIGHT ORGAN (Lichtorgel, früher "retro"): Bass rot, Mitten grün, Höhen blau
+void effectLightOrgan() {
     // 1. Auf "laut" normieren (Referenzen aus dem Einmessen, sonst feste Erfahrungswerte),
     // damit wir bei 1.0 landen
     float low   = constrain(state.kickEnergy  / max(1.0, state.refKick),  0.0, 1.0);
@@ -564,5 +581,5 @@ static void runEffectNamed(const String& name) {
     else if (name == "dimmerbounce") effectDimmerBounce();
     else if (name == "disco") effectDisco();
     else if (name == "disco2") effectDisco2();
-    else if (name == "retro") effectRetro();
+    else if (name == "lightorgan" || name == "retro") effectLightOrgan(); // "retro" = alter Name
 }

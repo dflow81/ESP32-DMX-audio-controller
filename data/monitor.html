@@ -27,7 +27,7 @@
 <body>
 
 <div class="nav">
-    <img src="/logo.svg" style="height:32px; width:auto; margin-right:15px; vertical-align:middle;">
+    <img src="/logo.svg" class="nav-logo" alt="">
     <a href="/">Home</a>
     <a href="/wifi">WLAN</a>
     <a href="/dmxconfig">DMX</a>
@@ -43,6 +43,7 @@
             <span class="info" id="info">Lade …</span>
             <button id="pauseBtn" onclick="togglePause()">Pause</button>
         </div>
+        <div class="info" id="load" style="font-size:12px; color:#888; margin-top:6px;">Auslastung: …</div>
         <div class="legend">
             <span style="--c:#ffd54f">Dimmer</span>
             <span style="--c:#ff5252">Rot</span>
@@ -166,6 +167,22 @@ function togglePause() {
     paused = !paused;
     document.getElementById("pauseBtn").textContent = paused ? "Weiter" : "Pause";
 }
+
+// Auslastung der Tasks (Core 0: Audio + Display, Core 1: Effekte + DMX + Web)
+function pollLoad() {
+    if (document.hidden) return;
+    fetch("/api/load").then(r => r.json()).then(l => {
+        const ms = us => (us / 1000).toFixed(1) + " ms";
+        document.getElementById("load").textContent =
+            `Core 0 – Audio: ${l.audio.percent} % (${ms(l.audio.us)}/Frame, max ${ms(l.audio.maxUs)})` +
+            (l.display.us ? `, Display: ${ms(l.display.us)}` : "") +
+            ` · Core 1 – Effekte: ${ms(l.effect.us)} (max ${ms(l.effect.maxUs)}), ` +
+            `DMX: ${l.dmx.fps} Bilder/s, ${ms(l.dmx.us)} senden` +
+            ` · RAM frei: ${Math.round(l.heapFree / 1024)} KB`;
+    }).catch(() => {});
+}
+pollLoad();
+setInterval(pollLoad, 2000);
 
 fetch("/api/getConfig").then(r => r.json()).then(cfg => {
     config = cfg;

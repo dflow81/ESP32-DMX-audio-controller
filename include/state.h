@@ -56,11 +56,14 @@ struct GroupSettings {
 };
 
 // Farbpalette, die Chase, Disco, Fade & Co. statt fester Farben verwenden
-#define PALETTE_MAX 4
+#define PALETTE_MAX 8
 struct Palette {
     bool    on = false;
     uint8_t size = 3;           // 2…PALETTE_MAX
-    uint8_t c[PALETTE_MAX][3] = {{255, 0, 0}, {0, 0, 255}, {255, 0, 255}, {0, 255, 255}};
+    uint8_t c[PALETTE_MAX][3] = {
+        {255, 0, 0}, {0, 0, 255}, {255, 0, 255}, {0, 255, 255},
+        {255, 255, 0}, {0, 255, 0}, {255, 128, 0}, {255, 255, 255}
+    };
 };
 
 // Cue-Liste: feste Abfolge von Presets
@@ -202,7 +205,7 @@ struct ControllerState {
     // Mikrofon-Kalibrierung (Einmessen)
     bool   calibrated = false;
     double gateKick = 0, gateSnare = 0, gateHihat = 0;            // Rauschschwellen
-    double refKick = 180000, refSnare = 190000, refHihat = 170000; // "laut" für Retro & Co.
+    double refKick = 180000, refSnare = 190000, refHihat = 170000; // "laut" für Light Organ & Co.
     double refLevel = 5000;                                        // Pegel für Vollausschlag
 
     // Spektrum für die Web-UI (16 Bänder, 0…255)
@@ -220,6 +223,33 @@ struct ControllerState {
 };
 
 extern ControllerState state;
+
+// --- Task-Aufteilung auf die zwei Cores ---
+// Core 0: WLAN-Stack, Audio (FFT), Display
+// Core 1: DMX-Senden, Webserver (AsyncTCP), Effekte, loop() (WLAN-Verwaltung, OTA, WebSocket)
+#define CORE_AUDIO      0
+#define CORE_LIGHT      1
+#define PRIO_DMX        5   // muss pünktlich senden, rechnet aber kaum
+#define PRIO_AUDIO      3   // darf nicht hinter das Mikrofon zurückfallen
+#define PRIO_EFFECT     2
+#define PRIO_DISPLAY    1
+
+// Laufzeit-Messung pro Task (µs), für /api/load
+struct LoadStats {
+    volatile uint32_t audioUs = 0, audioMaxUs = 0;     // Rechenzeit pro Audio-Frame
+    volatile uint32_t effectUs = 0, effectMaxUs = 0;   // Rechenzeit pro Effekt-Bild
+    volatile uint32_t dmxUs = 0, dmxMaxUs = 0;         // Sendezeit pro DMX-Bild
+    volatile uint32_t displayUs = 0;                   // Zeichnen + Übertragen
+    volatile uint32_t dmxFrames = 0;                   // gesendete DMX-Bilder (für Bildrate)
+    TaskHandle_t audioTask = nullptr, effectTask = nullptr, dmxTask = nullptr, displayTask = nullptr;
+};
+extern LoadStats loadStats;
+
+// Gleitender Mittelwert + Maximum (Maximum klingt langsam ab)
+inline void recordLoad(volatile uint32_t &avg, volatile uint32_t &mx, uint32_t us) {
+    avg = (avg * 15 + us) / 16;
+    mx = (us > mx) ? us : (mx - mx / 64);
+}
 
 // Grenzen für die Effekt-Geschwindigkeit (verhindert Division durch 0)
 #define TIMER_SPEED_MIN 20

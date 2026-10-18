@@ -10,5 +10,6 @@
 // Ohne angeschlossenes Display passiert einfach nichts.
 void setupDisplay();
 
-// Zeichnet den aktuellen Status (in loop() aufrufen, aktualisiert ~10x pro Sekunde)
-void handleDisplay();
+// Startet den Display-Task auf Core 0 (zeichnet ~10x pro Sekunde).
+// Die I2C-Übertragung (~25 ms pro Bild) belastet so nicht Core 1 mit Effekten und Webserver.
+void startDisplayTask();

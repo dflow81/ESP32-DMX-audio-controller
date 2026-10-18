@@ -10,9 +10,11 @@
 #define SAMPLE_COUNT 1024
 #define SAMPLE_RATE 44100
 
-double vReal[SAMPLE_COUNT];
-double vImag[SAMPLE_COUNT];
-ArduinoFFT<double> FFT = ArduinoFFT<double>(vReal, vImag, SAMPLE_COUNT, SAMPLE_RATE);
+// float statt double: Der ESP32 rechnet float in Hardware, double nur in Software
+// (um ein Vielfaches langsamer). Summen werden weiter in double gebildet.
+float vReal[SAMPLE_COUNT];
+float vImag[SAMPLE_COUNT];
+ArduinoFFT<float> FFT = ArduinoFFT<float>(vReal, vImag, SAMPLE_COUNT, SAMPLE_RATE);
 
 // ------------------------------------------------------------
 // Micro-Beat Detection Logik mit Noise-Gate
@@ -206,7 +208,7 @@ bool applyCalibration(String &message) {
         }
     }
     if (calMusic.done) {
-        // "Laut" = Spitzen der Musik (für Retro-Effekt und Pegelanzeige)
+        // "Laut" = Spitzen der Musik (für Light Organ und Pegelanzeige)
         state.refKick  = max(musicPeak[0], state.gateKick * 2 + 1);
         state.refSnare = max(musicPeak[1], state.gateSnare * 2 + 1);
         state.refHihat = max(musicPeak[2], state.gateHihat * 2 + 1);
@@ -278,11 +280,12 @@ void taskAudio(void *pv) {
 
     for (;;) {
         i2s_read(I2S_NUM_0, raw, SAMPLE_COUNT * sizeof(int32_t), &bytesRead, portMAX_DELAY);
+        uint32_t t0 = micros(); // Rechenzeit ab hier messen (das Warten aufs Mikrofon zählt nicht)
 
         // Samples übernehmen und Mittelwert (DC-Offset des Mikrofons) bestimmen
         double dc = 0;
         for (int i = 0; i < SAMPLE_COUNT; i++) {
-            vReal[i] = (double)(raw[i] >> 14); 
+            vReal[i] = (float)(raw[i] >> 14); 
             vImag[i] = 0;
             dc += vReal[i];
         }
@@ -299,7 +302,7 @@ void taskAudio(void *pv) {
         state.level = currentLevel;
 
         // Hinweis: Es gibt bewusst keine Gain-Stufe. Alle Schwellen (Noise-Gate,
-        // Retro-Effekt, Drop-Erkennung) arbeiten auf den Rohenergien; die frühere
+        // Light Organ, Drop-Erkennung) arbeiten auf den Rohenergien; die frühere
         // Auto-Gain-Verstärkung wurde ohnehin wieder herausgerechnet.
 
         FFT.windowing(FFT_WIN_TYP_HAMMING, FFT_FORWARD);
@@ -312,7 +315,7 @@ void taskAudio(void *pv) {
         double hRaw = bandEnergy(180, 450);  // ~7.7-19 kHz Hi-Hat
 
         // --- WICHTIG: Energiewerte in den globalen State schreiben ---
-        // Nur so kann die effects.cpp (Retro-Effekt) darauf zugreifen!
+        // Nur so kann die effects.cpp (Light Organ) darauf zugreifen!
         state.kickEnergy  = kRaw;
         state.snareEnergy = sRaw;
         state.hihatEnergy = hRaw;
@@ -383,6 +386,7 @@ void taskAudio(void *pv) {
             state.drop = false;
         }
 
+        recordLoad(loadStats.audioUs, loadStats.audioMaxUs, micros() - t0);
         vTaskDelay(1);
     }
 }

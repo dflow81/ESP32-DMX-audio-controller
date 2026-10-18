@@ -817,6 +817,50 @@ void setupWeb() {
         scheduleRestart(1500);
     });
 
+    // API: Auslastung der Tasks (zum Prüfen der Aufteilung auf die Cores)
+    server.on("/api/load", HTTP_GET, [](AsyncWebServerRequest *req){
+        static uint32_t lastFrames = 0;
+        static unsigned long lastMs = 0;
+        unsigned long now = millis();
+        uint32_t frames = loadStats.dmxFrames;
+        float fps = (lastMs && now > lastMs) ? (frames - lastFrames) * 1000.0f / (now - lastMs) : 0;
+        lastFrames = frames;
+        lastMs = now;
+
+        JsonDocument doc;
+        // Audio: Anteil der Rechenzeit an einem Mikrofon-Frame (1024 Samples = 23,2 ms)
+        JsonObject a = doc["audio"].to<JsonObject>();
+        a["core"] = CORE_AUDIO;
+        a["us"] = loadStats.audioUs;
+        a["maxUs"] = loadStats.audioMaxUs;
+        a["percent"] = loadStats.audioUs * 100 / 23220;
+        JsonObject e = doc["effect"].to<JsonObject>();
+        e["core"] = CORE_LIGHT;
+        e["us"] = loadStats.effectUs;
+        e["maxUs"] = loadStats.effectMaxUs;
+        JsonObject d = doc["dmx"].to<JsonObject>();
+        d["core"] = CORE_LIGHT;
+        d["us"] = loadStats.dmxUs;
+        d["maxUs"] = loadStats.dmxMaxUs;
+        d["fps"] = roundf(fps * 10) / 10;
+        JsonObject disp = doc["display"].to<JsonObject>();
+        disp["core"] = CORE_AUDIO;
+        disp["us"] = loadStats.displayUs;
+
+        // Freier Stack pro Task (Bytes) – zeigt, ob die Stack-Größen reichen
+        JsonObject st = doc["stackFree"].to<JsonObject>();
+        if (loadStats.audioTask)   st["audio"]   = uxTaskGetStackHighWaterMark(loadStats.audioTask);
+        if (loadStats.effectTask)  st["effect"]  = uxTaskGetStackHighWaterMark(loadStats.effectTask);
+        if (loadStats.dmxTask)     st["dmx"]     = uxTaskGetStackHighWaterMark(loadStats.dmxTask);
+        if (loadStats.displayTask) st["display"] = uxTaskGetStackHighWaterMark(loadStats.displayTask);
+
+        doc["heapFree"] = ESP.getFreeHeap();
+        doc["heapMin"]  = ESP.getMinFreeHeap();
+        String json;
+        serializeJson(doc, json);
+        req->send(200, "application/json", json);
+    });
+
     // API: Aktuell gesendete DMX-Werte (binär, 1 Byte pro Kanal) für den DMX-Monitor
     server.on("/api/dmx", HTTP_GET, [](AsyncWebServerRequest *req){
         static uint8_t buf[512];

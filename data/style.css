@@ -11,15 +11,28 @@ body {
     background: #222;
     padding: 12px;
     display: flex;
-    gap: 20px;
+    flex-wrap: wrap;          /* auf dem Handy in eine zweite Zeile umbrechen */
+    align-items: center;
+    gap: 10px 20px;
     border-bottom: 2px solid #333;
     font-size: 13px;
+}
+
+.nav-logo {
+    height: 32px;
+    width: auto;
+    margin-right: 15px;
+    vertical-align: middle;
 }
 
 .nav a {
     color: #fff;
     text-decoration: none;
     font-weight: bold;
+}
+
+.nav a.active {
+    color: #4fc3f7;           /* aktuelle Seite hervorheben */
 }
 
 .container {
@@ -410,7 +423,7 @@ input[type="range"]:disabled {
 .btn-fog.on { background: #ccd; color: #000; box-shadow: 0 0 16px #ccd; }
 
 /* Palette */
-.palette-row { display: flex; gap: 10px; margin-top: 10px; }
+.palette-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
 .palette-row input[type="color"] { width: 48px; height: 36px; border: none; background: none; padding: 0; cursor: pointer; }
 
 /* Gruppen */

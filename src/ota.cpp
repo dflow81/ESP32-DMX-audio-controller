@@ -29,7 +29,7 @@ static const char UPDATE_PAGE[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 <title>Update - ESP32 DMX Controller</title>
 <link rel="stylesheet" href="/style.css">
 <style>
-  body { background:#121212; color:#ddd; font-family:sans-serif; }
+  body { background:#111; color:#ddd; font-family:Arial, sans-serif; margin:0; }
   .ota { max-width:520px; margin:20px auto; padding:0 16px; }
   .ota .card { background:#1e1e1e; border-radius:10px; padding:16px; margin-bottom:16px; }
   .ota input[type=file] { width:100%; margin:12px 0; color:#ccc; }
@@ -42,6 +42,7 @@ static const char UPDATE_PAGE[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 </head>
 <body>
 <div class="nav">
+  <img src="/logo.svg" class="nav-logo" alt="">
   <a href="/">Home</a>
   <a href="/wifi">WLAN</a>
   <a href="/dmxconfig">DMX</a>

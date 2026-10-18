@@ -14,17 +14,41 @@ uint8_t enPin = 33;
 
 SparkFunDMX dmx;
 
-static int outChannels = 0;        // So viele Kanäle sendet die Schnittstelle gerade
-static uint8_t sentOut[512];       // Zuletzt gesendete Werte (für den DMX-Monitor)
+// ------------------------------------------------------------
+// Aufteilung: Der Effekt-Task berechnet das Bild (sentOut) und übergibt es;
+// ein eigener DMX-Task (Core 1, höchste Priorität) sendet es. So blockiert
+// das langsame serielle Senden (bis ~23 ms bei 512 Kanälen) weder die Effekte
+// noch – über den StateLock – den Webserver.
+// ------------------------------------------------------------
+#define DMX_REFRESH_MS 100            // ohne neues Bild spätestens so oft wiederholen
 
-// Passt die Anzahl der gesendeten Kanäle an (z. B. wenn ein PC per Art-Net
-// mehr Kanäle steuert, als Fixtures angelegt sind). Nur bei Änderung.
+static uint8_t sentOut[512];          // Zuletzt berechnetes Bild (auch für den DMX-Monitor)
+static int sentLen = 0;
+
+static portMUX_TYPE frameMux = portMUX_INITIALIZER_UNLOCKED;
+static uint8_t pendingFrame[512];     // Übergabe an den DMX-Task
+static int pendingLen = 0;
+static TaskHandle_t dmxTaskHandle = nullptr;
+
+static int outChannels = 0;           // Nur im DMX-Task: so viele Kanäle sendet die Schnittstelle
+
+// Bild an den DMX-Task übergeben (aus dem Effekt-Task)
+static void publishFrame(int len) {
+    sentLen = len;
+    portENTER_CRITICAL(&frameMux);
+    memcpy(pendingFrame, sentOut, len);
+    pendingLen = len;
+    portEXIT_CRITICAL(&frameMux);
+    if (dmxTaskHandle) xTaskNotifyGive(dmxTaskHandle);
+}
+
+// Nur im DMX-Task: Anzahl der gesendeten Kanäle anpassen (z. B. wenn ein PC per
+// Art-Net mehr Kanäle steuert, als Fixtures angelegt sind). Nur bei Änderung.
 static void ensureOutputChannels(int n) {
     n = constrain(n, 1, 512);
     if (n == outChannels) return;
     dmx.begin(dmxSerial, enPin, n);
     dmx.setComDir(DMX_WRITE_DIR);
-    if (n < outChannels) memset(sentOut + n, 0, outChannels - n);
     outChannels = n;
 }
 
@@ -77,7 +101,7 @@ void setFixtureColor(int index, uint8_t r, uint8_t g, uint8_t b, uint8_t w) {
     setChannel(base, def->offsetW, w);
 }
 
-void setupDMX() {
+static void startDMXHardware() {
     // 1. Enable-Pin explizit als Ausgang definieren
     pinMode(enPin, OUTPUT);
     
@@ -85,10 +109,52 @@ void setupDMX() {
     digitalWrite(enPin, HIGH);
     if (state.numChannels > 512) state.numChannels = 512;
     dmxSerial.begin(DMX_BAUD, DMX_FORMAT, rxPin, txPin);
-    dmx.begin(dmxSerial, enPin, state.numChannels);
+    dmx.begin(dmxSerial, enPin, max(1, state.numChannels));
     dmx.setComDir(DMX_WRITE_DIR);
     outChannels = max(1, state.numChannels);
     Serial.printf("DMX gestartet mit %d Kanälen\n", state.numChannels);
+}
+
+static void dmxTask(void *param) {
+    static uint8_t frame[512];
+    for (;;) {
+        // Auf ein neues Bild warten – oder nach DMX_REFRESH_MS das letzte wiederholen
+        // (DMX-Geräte erwarten laufend Daten)
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(DMX_REFRESH_MS));
+
+        if (state.dmxReinit) {   // Fixture-Config geändert
+            state.dmxReinit = false;
+            dmxSerial.flush();
+            startDMXHardware();
+        }
+
+        int len;
+        portENTER_CRITICAL(&frameMux);
+        len = pendingLen;
+        memcpy(frame, pendingFrame, len);
+        portEXIT_CRITICAL(&frameMux);
+
+        uint32_t t0 = micros();
+        // Erst warten, bis das vorige Bild komplett draußen ist: Die Bibliothek
+        // schaltet für das Break die Baudrate um und würde sonst dessen Ende verstümmeln
+        dmxSerial.flush();
+        ensureOutputChannels(len);
+        if (len > 0) dmx.writeBytes(frame, len, 1);
+        dmx.update();
+        recordLoad(loadStats.dmxUs, loadStats.dmxMaxUs, micros() - t0);
+        loadStats.dmxFrames++;
+    }
+}
+
+void setupDMX() {
+    if (!dmxTaskHandle) {
+        startDMXHardware();
+        xTaskCreatePinnedToCore(dmxTask, "dmxTask", 4096, NULL, PRIO_DMX, &dmxTaskHandle, CORE_LIGHT);
+        loadStats.dmxTask = dmxTaskHandle;
+    } else {
+        state.dmxReinit = true;   // Neustart übernimmt der DMX-Task selbst
+        xTaskNotifyGive(dmxTaskHandle);
+    }
 }
 
 // MH
@@ -202,7 +268,7 @@ void updateDMX() {
 
     // Nebelmaschine kann hinter den Fixtures liegen → so weit ausgeben
     int fogIdx = state.fogChannel - 1;          // -1 = keine
-    ensureOutputChannels(max(state.numChannels, state.fogChannel)); // nach Art-Net-Betrieb wieder normal
+    int total = constrain(max(state.numChannels, state.fogChannel), 1, 512);
 
     unsigned long now = millis();
     if (state.fadeRequest) {
@@ -224,7 +290,7 @@ void updateDMX() {
     unsigned long nowFog = millis();
     bool fogOn = fogIdx >= 0 && ((long)(state.fogUntil - nowFog) > 0 || (long)(state.manualFogUntil - nowFog) > 0);
 
-    for (int i = 0; i < outChannels; i++) {
+    for (int i = 0; i < total; i++) {
         uint8_t v = i < state.numChannels ? state.dmx[i] : 0;
         if (v == 0 && i < state.numChannels) v = state.dmxPreview[i];
 
@@ -241,29 +307,27 @@ void updateDMX() {
         // Nebel: eigener Kanal, unabhängig von Master, Übergängen und Blackout
         if (i == fogIdx) out = fogOn ? state.fogLevel : 0;
         sentOut[i] = out;
-        dmx.writeByte(out, i + 1);
     }
-    dmx.update();
+    publishFrame(total);
 }
 
 void updateDMXFromNetwork(const uint8_t *data, int len) {
     len = constrain(len, 0, 512);
-    ensureOutputChannels(max(len, state.numChannels));
+    int total = constrain(max(len, state.numChannels), 1, 512);
     cancelFade();
 
     bool dark = state.blackout;
-    for (int i = 0; i < outChannels; i++) {
+    for (int i = 0; i < total; i++) {
         uint8_t v = i < len ? data[i] : 0;
         lastOut[i] = v; // damit nach dem Art-Net-Betrieb sauber übergeblendet wird
         uint8_t out = (dark && isDimmableChannel(i)) ? 0 : v;
         sentOut[i] = out;
-        dmx.writeByte(out, i + 1);
     }
-    dmx.update();
+    publishFrame(total);
 }
 
 int getDMXOutput(uint8_t *buf, int maxLen) {
-    int n = min(outChannels, maxLen);
+    int n = min(sentLen, maxLen);
     memcpy(buf, sentOut, n);
     return n;
 }

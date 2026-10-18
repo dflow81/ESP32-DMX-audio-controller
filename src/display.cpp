@@ -45,13 +45,8 @@ void setupDisplay() {
     Serial.printf("Display: SSD1306 an 0x%02X\n", addr);
 }
 
-void handleDisplay() {
-    if (!displayOk) return;
-
-    static unsigned long lastDraw = 0;
+static void drawDisplay() {
     unsigned long now = millis();
-    if (now - lastDraw < DISPLAY_REFRESH_MS) return;
-    lastDraw = now;
 
     // Effekt-Name kurz unter Lock kopieren (String wird vom Webserver geändert)
     String effect;
@@ -94,6 +89,7 @@ void handleDisplay() {
     if (net) {
         oled.print("PC-Steuerung");
     } else {
+        if (effect == "lightorgan") effect = "light organ";
         if (effect.length() > 21) effect = effect.substring(0, 21);
         oled.print(effect);
     }
@@ -127,4 +123,19 @@ void handleDisplay() {
     oled.fillRect(0, 59, (int)(level * DISPLAY_WIDTH), 5, SSD1306_WHITE);
 
     oled.display();
+}
+
+static void displayTask(void *param) {
+    for (;;) {
+        uint32_t t0 = micros();
+        drawDisplay();
+        loadStats.displayUs = micros() - t0;
+        vTaskDelay(pdMS_TO_TICKS(DISPLAY_REFRESH_MS));
+    }
+}
+
+void startDisplayTask() {
+    if (!displayOk) return;   // kein Display → kein Task
+    xTaskCreatePinnedToCore(displayTask, "displayTask", 4096, NULL, PRIO_DISPLAY,
+                            &loadStats.displayTask, CORE_AUDIO);
 }
