@@ -139,9 +139,9 @@
             <!-- Buttons werden per JS generiert -->
         </div>
         <div class="live-buttons">
-            <button id="strobeBtn" class="btn-strobe">STROBE (gedrückt halten)</button>
+            <button id="strobeBtn" class="btn-strobe" title="gedrückt halten">STROBE</button>
             <button id="blackoutBtn" class="btn-blackout" onclick="toggleBlackout()">BLACKOUT</button>
-            <button id="fogBtn" class="btn-fog fog-only" style="display:none;">NEBEL</button>
+            <button id="fogBtn" class="btn-fog unconfigured" title="gedrückt halten">NEBEL</button>
         </div>
     </div>
 
@@ -259,7 +259,11 @@ window.onload = () => {
     loadConfig();
     loadPresets();
     loadCues();
-    setupHoldButton("fogBtn", "/api/fog");
+    setupHoldButton("fogBtn", "/api/fog", () => {
+        if (fogConfigured) return true;
+        alert("Noch keine Nebelmaschine eingerichtet.\nDen DMX-Kanal stellst du unter DMX → Nebelmaschine ein.");
+        return false;
+    });
     drawCircle();
     connectLive();
 
@@ -313,6 +317,8 @@ function loadConfig() {
             if(data.fog) {
                 const hasFog = data.fog.channel > 0;
                 document.querySelectorAll(".fog-only").forEach(el => el.style.display = hasFog ? "" : "none");
+                fogConfigured = hasFog;
+                document.getElementById("fogBtn").classList.toggle("unconfigured", !hasFog);
                 document.getElementById("fogOnDrop").checked = !!data.fog.onDrop;
             }
             if(data.standbyMin !== undefined) {
@@ -481,12 +487,15 @@ function drawSpectrum(spec) {
 }
 
 // --- Halten-Knöpfe (Nebel): solange gedrückt alle 250 ms "on" senden ---
-function setupHoldButton(id, url) {
+let fogConfigured = false;
+// canStart (optional): wird vor dem Start gefragt; false = nichts senden
+function setupHoldButton(id, url, canStart) {
     const btn = document.getElementById(id);
     let timer = null;
     const start = e => {
         e.preventDefault();
         if (timer) return;
+        if (canStart && !canStart()) return;
         btn.classList.add("on");
         fetch(url + "?on=1");
         timer = setInterval(() => fetch(url + "?on=1"), 250);
