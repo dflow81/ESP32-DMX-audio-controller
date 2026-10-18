@@ -5,6 +5,7 @@
 #include "ota.h"
 #include "state.h"
 #include "web.h"
+#include "web_util.h"
 
 // ------------------------------------------------------------
 // Gemeinsame Logik für beide Update-Wege
@@ -140,7 +141,7 @@ static String webUpdateError;
 
 static void setupWebUpdate() {
     server.on("/update", HTTP_GET, [](AsyncWebServerRequest *req) {
-        if (!req->authenticate(OTA_USER, OTA_PASSWORD)) return req->requestAuthentication();
+        if (!adminAuthorized(req)) return;
         req->send(200, "text/html", UPDATE_PAGE);
     });
 
@@ -160,7 +161,7 @@ static void setupWebUpdate() {
         [](AsyncWebServerRequest *req, const String &filename, size_t index,
            uint8_t *data, size_t len, bool final) {
             if (index == 0) {
-                webUploadDenied = !req->authenticate(OTA_USER, OTA_PASSWORD);
+                webUploadDenied = !authActive() && !req->authenticate(OTA_USER, OTA_PASSWORD);
                 webUpdateError = "";
                 if (webUploadDenied) return;
 

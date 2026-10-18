@@ -252,6 +252,11 @@ struct ControllerState {
     uint8_t syncGroup = 1;               // nur Controller derselben Gruppe hören aufeinander
     volatile bool syncReceiving = false; // Slave: bekommt gerade Daten vom Master
 
+    // Passwortschutz für die Web-Oberfläche (abwählbar)
+    bool    authOn = false;
+    String  authUser = "admin";
+    String  authPass = "";
+
     // MQTT / Home Assistant
     bool    mqttOn = false;
     String  mqttHost = "";
@@ -377,6 +382,9 @@ void handleAutoSave();
 
 // Startet den ESP nach delayMs neu (ausgeführt in loop(), damit HTTP-Antworten noch rausgehen)
 void scheduleRestart(unsigned long delayMs);
+
+// Passwortschutz wirklich aktiv? (eingeschaltet UND ein Passwort gesetzt – sonst kein Aussperren)
+inline bool authActive() { return state.authOn && state.authPass.length() >= 4; }
 
 // Tap-Tempo: einen Tap registrieren (Web-UI oder Taster), gibt die BPM zurück
 int registerTap();

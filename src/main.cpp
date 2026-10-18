@@ -378,6 +378,15 @@ void setup() {
     if (!LittleFS.begin(true)) Serial.println("LittleFS Error!");
 
     initState(); // Lädt beim Start alle gespeicherten Werte
+
+    // Notausgang: Tap-Taster beim Einschalten gedrückt → Passwortschutz aus
+    pinMode(BTN_TAP_PIN, INPUT_PULLUP);
+    delay(20);
+    if (digitalRead(BTN_TAP_PIN) == LOW && state.authOn) {
+        state.authOn = false;
+        saveConfig();
+        Serial.println("Passwortschutz per Tap-Taster abgeschaltet");
+    }
     updateDMXChannelCount();
     setupDMX();
     setupWiFi(); 

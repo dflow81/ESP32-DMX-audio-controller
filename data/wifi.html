@@ -52,6 +52,20 @@
 
     <!-- RESET BEREICH -->
     <div class="card">
+        <h2>Zugang (Passwort)</h2>
+        <label class="net-row"><input type="checkbox" id="authOn"> Bedienung nur mit Passwort</label>
+        <div class="net-grid">
+            <label>Benutzer<input type="text" id="authUser" value="admin" autocomplete="off"></label>
+            <label>Passwort (mind. 4 Zeichen)<input type="password" id="authPass" placeholder="unverändert" autocomplete="new-password"></label>
+        </div>
+        <button class="btn-save" style="width:100%; margin-top:12px;" onclick="saveAuth()">Zugang speichern</button>
+        <p class="net-hint">Schützt alle Seiten und Funktionen. Nach dem Einschalten fragt der Browser einmal nach
+            Benutzer und Passwort. Update und Backup nutzen dann ebenfalls dieses Passwort.<br>
+            <b>Passwort vergessen?</b> Beim Einschalten des Controllers den Tap-Taster (GPIO 14) gedrückt halten –
+            dann ist der Passwortschutz wieder aus.</p>
+    </div>
+
+    <div class="card">
         <h2>Mehrere Controller synchron</h2>
         <div class="net-row">
             <label>Rolle
@@ -122,6 +136,29 @@ function loadNet() {
         document.getElementById("mqttUser").value = m.user || "";
         document.getElementById("mqttPass").placeholder = m.hasPass ? "unverändert" : "kein Passwort";
         document.getElementById("mqttTopic").value = m.topic || "dmxcontroller";
+        const au = cfg.authCfg || {};
+        document.getElementById("authOn").checked = !!au.on;
+        document.getElementById("authUser").value = au.user || "admin";
+        document.getElementById("authPass").placeholder = au.hasPass ? "unverändert" : "noch keins gesetzt";
+        authHasPass = !!au.hasPass;
+    });
+}
+
+let authHasPass = false;
+function saveAuth() {
+    const on = document.getElementById("authOn").checked;
+    const user = document.getElementById("authUser").value.trim() || "admin";
+    const pass = document.getElementById("authPass").value;
+    if (pass && pass.length < 4) return alert("Das Passwort muss mindestens 4 Zeichen haben.");
+    if (on && !pass && !authHasPass) return alert("Bitte zuerst ein Passwort eingeben.");
+    let q = `authOn=${on ? 1 : 0}&authUser=${encodeURIComponent(user)}`;
+    if (pass) q += "&authPass=" + encodeURIComponent(pass);
+    fetch("/api/settings?" + q).then(r => {
+        document.getElementById("authPass").value = "";
+        if (!r.ok) return alert("Fehler beim Speichern.");
+        alert(on ? "Passwortschutz ist an. Der Browser fragt gleich nach Benutzer und Passwort."
+                 : "Passwortschutz ist aus.");
+        location.reload();
     });
 }
 

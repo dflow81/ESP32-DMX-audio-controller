@@ -360,6 +360,7 @@ bool importConfigJson(const char *json, size_t len, String &error) {
     doc["wifi_ssid"] = state.wifi_ssid;
     doc["wifi_pass"] = state.wifi_pass;
     doc["mqtt"]["pass"] = state.mqttPass;
+    doc["auth"]["pass"] = state.authPass;   // Passwort des Geräts behalten
 
     if (!writeConfigToNVS(doc)) {
         error = "Speichern fehlgeschlagen";
@@ -470,6 +471,12 @@ static void buildConfigDoc(JsonDocument &doc, bool includeWifi) {
             ho["f"] = h.fixture; ho["p"] = h.pan; ho["t"] = h.tilt;
         }
     }
+
+    // Passwortschutz (Passwort nicht ins Backup)
+    JsonObject auth = doc["auth"].to<JsonObject>();
+    auth["on"]   = state.authOn;
+    auth["user"] = state.authUser;
+    if (includeWifi) auth["pass"] = state.authPass;
 
     // Intelligente Auto-Show, Sync, MQTT
     doc["autoShowSmart"] = state.autoShowSmart;
@@ -751,6 +758,12 @@ void loadConfig() {
         }
         state.positions.push_back(pos);
     }
+
+    // Passwortschutz
+    JsonObject auth = doc["auth"].as<JsonObject>();
+    state.authOn   = auth["on"]   | false;
+    state.authUser = auth["user"] | "admin";
+    if (auth["pass"].is<const char*>()) state.authPass = auth["pass"].as<String>();
 
     // Intelligente Auto-Show, Sync, MQTT
     state.autoShowSmart = doc["autoShowSmart"] | false;
