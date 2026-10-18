@@ -1,17 +1,17 @@
 #pragma once
 #include <ESPAsyncWebServer.h>
 
-// Globale Webserver-Objekte (definiert in web.cpp)
+// Global web server objects (defined in web.cpp)
 extern AsyncWebServer server;
 extern AsyncWebSocket ws;
 
-// Setup-Funktionen
+// Setup functions
 void setupWiFi();
 void setupWeb();
 
-// Live-Status als JSON (für /api/status und den WebSocket)
+// Live status as JSON (for /api/status and the WebSocket)
 String buildStatusJson(bool beat);
 
-// Schickt den Live-Status per WebSocket an alle Browser (in loop() aufrufen):
-// sofort bei Beat/Drop, sonst alle 100 ms
+// Sends the live status via WebSocket to all browsers (call in loop()):
+// immediately on beat/drop, otherwise every 100 ms
 void handleLiveStatus();

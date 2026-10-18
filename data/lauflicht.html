@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Lauflicht-Editor</title>
     <link rel="stylesheet" href="/style.css">
+    <script src="/i18n.js"></script>
     <style>
         .ll-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; font-size: 13px; }
         .ll-row input[type=text], .ll-row select {
@@ -153,7 +154,7 @@ function renderGrid() {
     renderPreviewLamps();
 }
 
-// Malen mit Maus/Finger (auch Wischen über mehrere Felder)
+// Paint with mouse/finger (also swiping over several cells)
 function paintAt(target) {
     if (!target || !target.classList || !target.classList.contains("ll-cell")) return;
     cells[target.dataset.s][target.dataset.x] = brush;
@@ -166,7 +167,7 @@ el("grid").addEventListener("pointermove", e => {
 window.addEventListener("pointerup", () => painting = false);
 
 function makeRunner() {
-    // Eine Lampe in Pinselfarbe läuft von links nach rechts
+    // One lamp in the brush color runs from left to right
     const w = parseInt(el("width").value);
     el("steps").value = w;
     for (let s = 0; s < MAX_S; s++)
@@ -179,7 +180,7 @@ function clearGrid() {
     renderGrid();
 }
 
-// Vorschau: spielt die Schritte im Browser ab
+// Preview: plays the steps in the browser
 let previewStep = 0;
 function renderPreviewLamps() {
     const w = parseInt(el("width").value);

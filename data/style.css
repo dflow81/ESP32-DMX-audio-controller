@@ -1,4 +1,4 @@
-/* Bestehende Basis-Styles */
+/* Existing base styles */
 body {
     margin: 0;
     padding: 0;
@@ -11,7 +11,7 @@ body {
     background: #222;
     padding: 12px;
     display: flex;
-    flex-wrap: wrap;          /* auf dem Handy in eine zweite Zeile umbrechen */
+    flex-wrap: wrap;          /* wrap to a second line on phones */
     align-items: center;
     gap: 10px 20px;
     border-bottom: 2px solid #333;
@@ -32,7 +32,7 @@ body {
 }
 
 .nav a.active {
-    color: #4fc3f7;           /* aktuelle Seite hervorheben */
+    color: #4fc3f7;           /* highlight the current page */
 }
 
 .container {
@@ -43,7 +43,7 @@ body {
     padding-right:20px; 
 }
 
-.card, .box { /* .box für DMX-Config nutzt nun Card-Style */
+.card, .box { /* .box for the DMX config now uses the card style */
     background: #1b1b1b;
     padding: 12px;
     margin-bottom: 8px;
@@ -53,7 +53,7 @@ body {
 
 
 
-/* NEU: Tabellen-Design für DMX-Liste */
+/* Table design for the DMX list */
 table {
     width: 100%;
     border-collapse: collapse;
@@ -73,7 +73,7 @@ td {
     border-bottom: 1px solid #222;
 }
 
-/* NEU: Spezifische Buttons */
+/* Specific buttons */
 button {
     padding: 8px 14px;
     border: none;
@@ -90,18 +90,18 @@ button:hover {
 }
 
 .btn-add {
-    background: #2e4a31; /* Dezentes Grün */
+    background: #2e4a31; /* subtle green */
     color: #a8d5a2;
 }
 
 .btn-save {
-    background: #4fc3f7; /* Dein Akzent-Blau */
+    background: #4fc3f7; /* your accent blue */
     color: #000;
     font-weight: bold;
     margin-top: 10px;
 }
 
-/* Fehler-Anzeige bei Überlappung */
+/* error display on overlap */
 .error-row {
     background-color: #3a1a1a !important;
 }
@@ -113,23 +113,23 @@ button:hover {
     margin-top: 4px;
 }
 
-/* Bestehende UI-Elemente */
+/* Existing UI elements */
 .levelbar {
     width: 100%;
     height: 20px;
-    background: #222; /* Hintergrund für "Stille" */
+    background: #222; /* background for "silence" */
     border-radius: 5px;
     position: relative;
     border: 1px solid #333;
     overflow: hidden;
 }
 
-/* Der eigentliche bunte Balken */
+/* the actual colorful bar */
 .level {
     height: 100%;
-    width: 0%; /* Wird vom JS gesteuert */
+    width: 0%; /* controlled by JS */
     
-    /* Der statische Farbverlauf */
+    /* the static gradient */
     background: linear-gradient(to right, 
         #4caf50 0%, 
         #4caf50 60%, 
@@ -137,12 +137,12 @@ button:hover {
         #f44336 100%
     );
     
-    /* WICHTIG: Damit der Verlauf statisch bleibt und nicht mitwächst */
+    /* IMPORTANT: so the gradient stays static and doesn't grow along */
     background-size: 100% 100%; 
-    background-attachment: fixed; /* Fixiert den Verlauf relativ zum Element */
+    background-attachment: fixed; /* fixes the gradient relative to the element */
 
     transition: width 0.08s ease-out;
-    box-shadow: 2px 0 5px rgba(0,0,0,0.5); /* Kleiner Schatten an der Spitze */
+    box-shadow: 2px 0 5px rgba(0,0,0,0.5); /* small shadow at the tip */
 }
 
 
@@ -158,8 +158,8 @@ button:hover {
 .indicator.on {
     background: #4fc3f7;
 }
-/* Slider Styling */
-/* Slider - WICHTIG: Kein Punkt vor 'input' */
+/* Slider styling */
+/* Slider - IMPORTANT: no dot before 'input' */
 input[type="range"] {
     -webkit-appearance: none;
     width: 100%;
@@ -179,32 +179,32 @@ input[type="range"]::-webkit-slider-thumb {
     cursor: pointer;
 }
 
-/* Farbauswahl Punkte */
+/* Color picker dots */
 .color-dot {
-    display: block;      /* Sicherstellen, dass sie angezeigt werden */
+    display: block;      /* make sure they are displayed */
     width: 35px;
     height: 35px;
     border-radius: 50%;
     border: 2px solid #444;
     cursor: pointer;
     transition: transform 0.1s;
-    min-width: 35px;     /* Verhindert das Schrumpfen */
+    min-width: 35px;     /* prevents shrinking */
 }
 
 .color-dot:active {
     transform: scale(0.8);
 }
 
-/* Nur die Schriftfarbe des aktiven Effekts ändern */
+/* Only change the text color of the active effect */
 .effect-btn.active {
-    background-color: #333 !important; /* Behält den dunklen Button-Hintergrund */
-    color: #4fc3f7 !important;        /* Hellblaue Schrift */
-    font-weight: bold;                 /* Macht es deutlicher */
-    border: 1px solid #4fc3f7;         /* Optional: Ein feiner blauer Rahmen */
-    box-shadow: inset 0 0 5px rgba(79, 195, 247, 0.2); /* Dezentes inneres Leuchten */
+    background-color: #333 !important; /* keeps the dark button background */
+    color: #4fc3f7 !important;        /* light blue text */
+    font-weight: bold;                 /* makes it clearer */
+    border: 1px solid #4fc3f7;         /* optional: a thin blue border */
+    box-shadow: inset 0 0 5px rgba(79, 195, 247, 0.2); /* subtle inner glow */
 }
 
-/* Strobe-Knopf (gedrückt halten) */
+/* Strobe button (hold) */
 .btn-strobe {
     width: 100%;
     margin-top: 15px;
@@ -215,7 +215,7 @@ input[type="range"]::-webkit-slider-thumb {
     background: #3a2a2a;
     color: #fff;
     border: 1px solid #ff5252;
-    touch-action: none;       /* kein Scrollen/Zoomen beim Halten */
+    touch-action: none;       /* no scrolling/zooming while holding */
     user-select: none;
     -webkit-user-select: none;
     -webkit-touch-callout: none;
@@ -227,7 +227,7 @@ input[type="range"]::-webkit-slider-thumb {
     box-shadow: 0 0 20px #fff;
 }
 
-/* Strobe + Blackout nebeneinander */
+/* Strobe + blackout side by side */
 .live-buttons {
     display: flex;
     gap: 10px;
@@ -310,7 +310,7 @@ input[type="range"]::-webkit-slider-thumb {
     margin-top: 8px;
 }
 
-/* Tap-Tempo */
+/* Tap tempo */
 .tap-row {
     display: flex;
     gap: 10px;
@@ -342,7 +342,7 @@ input[type="range"]::-webkit-slider-thumb {
     border-color: #4fc3f7;
 }
 
-/* Zusatzoptionen (Takt, Drop-Reaktion, Auto-Show) */
+/* Extra options (beat, drop reaction, auto show) */
 .opt-row {
     display: flex;
     flex-wrap: wrap;
@@ -372,7 +372,7 @@ input[type="range"]:disabled {
     opacity: 0.4;
 }
 
-/* Hinweis: PC steuert per Art-Net/sACN */
+/* Notice: PC controls via Art-Net/sACN */
 .net-badge {
     margin-top: 10px;
     padding: 6px 10px;
@@ -382,21 +382,21 @@ input[type="range"]:disabled {
     font-size: 12px;
 }
 
-/* Spektrum */
+/* Spectrum */
 .spec {
     width: 100%;
     margin-top: 10px;
     display: block;
 }
 
-/* Kleiner Knopf */
+/* Small button */
 .btn-small {
     margin-top: 10px;
     padding: 6px 10px;
     font-size: 12px;
 }
 
-/* Einmessen */
+/* Calibration */
 .cal-panel {
     margin-top: 10px;
     padding: 10px;
@@ -408,7 +408,7 @@ input[type="range"]:disabled {
 .cal-bar { height: 6px; background: #333; border-radius: 3px; overflow: hidden; margin: 8px 0; }
 .cal-bar div { height: 100%; width: 0; background: #4fc3f7; transition: width .2s; }
 
-/* Nebel-Knopf */
+/* Fog button */
 .btn-fog {
     flex: 1;
     padding: 18px;
@@ -421,13 +421,13 @@ input[type="range"]:disabled {
     -webkit-user-select: none;
 }
 .btn-fog.on { background: #ccd; color: #000; box-shadow: 0 0 16px #ccd; }
-.btn-fog.unconfigured { opacity: 0.4; }   /* noch kein Nebel-Kanal eingestellt */
+.btn-fog.unconfigured { opacity: 0.4; }   /* no fog channel configured yet */
 
 /* Palette */
 .palette-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
 .palette-row input[type="color"] { width: 48px; height: 36px; border: none; background: none; padding: 0; cursor: pointer; }
 
-/* Gruppen */
+/* Groups */
 .group-row {
     display: flex;
     flex-wrap: wrap;
@@ -456,7 +456,7 @@ input[type="range"]:disabled {
 .group-row input[type="color"] { width: 40px; height: 30px; border: none; background: none; padding: 0; }
 .group-row label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
 
-/* Cue-Liste */
+/* Cue list */
 .cue-row {
     display: flex;
     align-items: center;
@@ -469,7 +469,7 @@ input[type="range"]:disabled {
 .cue-row input[type="number"] { width: 70px; }
 .cue-nr { width: 20px; text-align: right; color: #888; font-size: 12px; }
 
-/* Virtuelle Bühne */
+/* Virtual stage */
 details.card > summary { cursor: pointer; }
 .stage {
     display: grid;
@@ -488,7 +488,7 @@ details.card > summary { cursor: pointer; }
     border: 2px solid #333;
     transition: background .1s;
 }
-.stage-dot {   /* Pan/Tilt-Position eines Moving Heads */
+.stage-dot {   /* pan/tilt position of a moving head */
     position: absolute;
     width: 8px;
     height: 8px;
@@ -514,7 +514,7 @@ details.card > summary { cursor: pointer; }
     box-shadow: inset 0 0 0 1px #4fc3f7;
 }
 
-/* Preset-Energie (intelligente Auto-Show) */
+/* Preset energy (smart auto show) */
 .preset-energy {
     padding: 8px 6px;
     border-radius: 0;
@@ -526,7 +526,7 @@ details.card > summary { cursor: pointer; }
 .preset-energy.e3 { color: #ff5252; }
 .stage-fx { cursor: pointer; }
 
-/* Startseite: einklappbare Einstellungs-Bereiche */
+/* Home page: foldable settings sections */
 details.fold > summary {
     font-weight: bold;
     padding: 2px 0;
@@ -545,6 +545,11 @@ details.fold[open] > summary::before { transform: rotate(90deg); }
 details.fold[open] > summary { margin-bottom: 10px; }
 .fold-info { color: #4fc3f7; font-size: 11px; font-weight: normal; }
 
-/* Master direkt bei den Effekten */
+/* Master right next to the effects */
 .master-row { margin-top: 15px; }
 .master-row input[type="range"] { width: 100%; }
+
+/* Language switch DE | EN on the right of the nav bar */
+.lang-switch { margin-left: auto; font-size: 12px; color: #666; }
+.nav .lang-switch a { font-weight: normal; color: #888; }
+.nav .lang-switch a.active { color: #4fc3f7; font-weight: bold; }

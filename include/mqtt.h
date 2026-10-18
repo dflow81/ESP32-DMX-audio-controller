@@ -1,11 +1,11 @@
 #pragma once
 
-// MQTT / Home Assistant: Der Controller meldet sich per MQTT-Discovery automatisch
-// in Home Assistant an – als Licht (an/aus = Blackout, Helligkeit = Master, Farbe,
-// Effekte), als Auswahl für die Presets und als BPM-Sensor.
-// Läuft in einem eigenen Task, damit ein nicht erreichbarer Broker nichts blockiert.
+// MQTT / Home Assistant: the controller registers itself automatically via MQTT discovery
+// in Home Assistant – as a light (on/off = blackout, brightness = master, color,
+// effects), as a preset selector and as a BPM sensor.
+// Runs in its own task so an unreachable broker blocks nothing.
 
 void setupMqtt();
 
-// Nach Änderung der MQTT-Einstellungen aufrufen (verbindet neu)
+// Call after changing the MQTT settings (reconnects)
 void mqttReconfigure();

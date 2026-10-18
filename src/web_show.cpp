@@ -1,4 +1,4 @@
-// Show-Steuerung: Effekte, Farben, Presets, Gruppen, Cue-Liste, Lauflichter, Einstellungen
+// Show control: effects, colors, presets, groups, cue list, chases, settings
 #include "web.h"
 #include "web_util.h"
 #include "state.h"
@@ -14,7 +14,7 @@
 #include "mqtt.h"
 
 void registerShowRoutes() {
-    // API: Blackout an/aus (wirkt sofort, wird nicht gespeichert)
+    // API: blackout on/off (takes effect immediately, not saved)
     server.on("/api/blackout", HTTP_GET, [](AsyncWebServerRequest *req){
         if (req->hasParam("on")) {
             state.blackout = req->getParam("on")->value().toInt() != 0;
@@ -22,13 +22,13 @@ void registerShowRoutes() {
         } else { req->send(400, "text/plain", "Error"); }
     });
 
-    // API: Tap-Tempo. Mehrmals im Takt tippen → BPM wird übernommen und festgehalten
+    // API: tap tempo. Tap several times on the beat → BPM is applied and locked
     server.on("/api/tap", HTTP_GET, [](AsyncWebServerRequest *req){
         state.lastUserMs = millis();
         req->send(200, "text/plain", String(registerTap()));
     });
 
-    // API: BPM festhalten an/aus (aus = wieder Erkennung aus der Musik)
+    // API: lock BPM on/off (off = detect from the music again)
     server.on("/api/bpmLock", HTTP_GET, [](AsyncWebServerRequest *req){
         if (req->hasParam("on")) {
             state.bpmLocked = req->getParam("on")->value().toInt() != 0;
@@ -40,7 +40,7 @@ void registerShowRoutes() {
         } else { req->send(400, "text/plain", "Error"); }
     });
 
-    // API: Einstellungen (beliebige Kombination der Parameter)
+    // API: settings (any combination of parameters)
     // beatSync=0|1, stepsPerBeat=0.5|1|2, autoShow=0|1, showBeats=N,
     // dropAction=0..3, dropPreset=Name, movePattern=0..4, moveSpread=0|1
     server.on("/api/settings", HTTP_GET, [](AsyncWebServerRequest *req){
@@ -61,7 +61,7 @@ void registerShowRoutes() {
         if ((v = param("movePattern")).length())  state.movePattern = constrain(v.toInt(), 0, MOVE_PATTERN_COUNT - 1);
         if ((v = param("moveSpread")).length())   state.moveSpread = v.toInt() != 0;
 
-        // Palette: paletteOn=0|1, paletteSize=2..4, palette=#rrggbb,#rrggbb,…
+        // Palette: paletteOn=0|1, paletteSize=2..8, palette=#rrggbb,#rrggbb,…
         if ((v = param("paletteOn")).length())   state.palette.on = v.toInt() != 0;
         if ((v = param("paletteSize")).length()) state.palette.size = constrain(v.toInt(), 2, PALETTE_MAX);
         if ((v = param("palette")).length()) {
@@ -74,7 +74,7 @@ void registerShowRoutes() {
             }
         }
 
-        // Nebel
+        // Fog
         if ((v = param("fogChannel")).length())     state.fogChannel = constrain(v.toInt(), 0, 512);
         if ((v = param("fogLevel")).length())       state.fogLevel = constrain(v.toInt(), 0, 255);
         if ((v = param("fogOnDrop")).length())      state.fogOnDrop = v.toInt() != 0;
@@ -86,29 +86,29 @@ void registerShowRoutes() {
         if ((v = param("standbyMin")).length())     state.standbyMin = constrain(v.toInt(), 0, 240);
         if (req->hasParam("standbyPreset"))         state.standbyPreset = param("standbyPreset");
 
-        // Cue-Liste
+        // Cue list
         if ((v = param("cueLoop")).length())        state.cueLoop = v.toInt() != 0;
 
-        // Übergänge, Effekt-Parameter, Lautstärke-Helligkeit
+        // Transitions, effect parameters, volume-driven brightness
         if ((v = param("fadeMs")).length())         state.fadeMs = constrain(v.toInt(), 0, 10000);
         if ((v = param("fxWidth")).length())        state.fxWidth = constrain(v.toInt(), 1, 8);
         if ((v = param("fxIntensity")).length())    state.fxIntensity = constrain(v.toInt(), 0, 100);
         if ((v = param("levelDim")).length())       state.levelDim = v.toInt() != 0;
         if ((v = param("levelDimDepth")).length())  state.levelDimDepth = constrain(v.toInt(), 0, 100);
 
-        // Zeitplan, Display
+        // Schedule, display
         if ((v = param("scheduleOn")).length())     state.scheduleOn = v.toInt() != 0;
         if ((v = param("scheduleStart")).length())  state.scheduleStart = v.substring(0, 5);
         if ((v = param("scheduleEnd")).length())    state.scheduleEnd = v.substring(0, 5);
         if (req->hasParam("schedulePreset"))        state.schedulePreset = param("schedulePreset");
         if ((v = param("displayOffMin")).length())  state.displayOffMin = constrain(v.toInt(), 0, 240);
 
-        // Intelligente Auto-Show, Sync
+        // Smart auto show, sync
         if ((v = param("autoShowSmart")).length())  state.autoShowSmart = v.toInt() != 0;
         if ((v = param("syncRole")).length())       state.syncRole = constrain(v.toInt(), 0, 2);
         if ((v = param("syncGroup")).length())      state.syncGroup = constrain(v.toInt(), 1, 9);
 
-        // MQTT (Passwort nur ändern, wenn mitgeschickt)
+        // MQTT (only change the password if it was sent)
         bool mqttChanged = false;
         if ((v = param("mqttOn")).length())         { state.mqttOn = v.toInt() != 0; mqttChanged = true; }
         if (req->hasParam("mqttHost"))              { state.mqttHost = param("mqttHost"); mqttChanged = true; }
@@ -118,13 +118,16 @@ void registerShowRoutes() {
         if ((v = param("mqttTopic")).length())      { state.mqttTopic = v; mqttChanged = true; }
         if (mqttChanged) mqttReconfigure();
 
-        // Passwortschutz (Passwort nur ändern, wenn mitgeschickt; mind. 4 Zeichen)
+        // Password protection (only change the password if it was sent; min. 4 characters)
         if (req->hasParam("authUser") && param("authUser").length()) state.authUser = param("authUser").substring(0, 20);
         if (req->hasParam("authPass")) {
             String p = param("authPass");
             if (p.length() >= 4) state.authPass = p.substring(0, 32);
         }
         if ((v = param("authOn")).length()) state.authOn = v.toInt() != 0;
+
+        // Language (for the display)
+        if ((v = param("lang")).length()) state.langEn = (v == "en");
 
         bool netChanged = false;
         if ((v = param("netInput")).length())    { state.netInput = v.toInt() != 0; netChanged = true; }
@@ -135,7 +138,7 @@ void registerShowRoutes() {
         req->send(200, "text/plain", "OK");
     });
 
-    // API: Gruppe einstellen. g=1..4, custom=0|1, effect=Name, color=#rrggbb, name=Text
+    // API: configure group. g=1..4, custom=0|1, effect=name, color=#rrggbb, name=text
     server.on("/api/setGroup", HTTP_GET, [](AsyncWebServerRequest *req){
         int g = req->hasParam("g") ? req->getParam("g")->value().toInt() : 0;
         if (g < 1 || g > GROUP_COUNT) { req->send(400, "text/plain", "Error"); return; }
@@ -150,7 +153,7 @@ void registerShowRoutes() {
         req->send(200, "text/plain", "OK");
     });
 
-    // API: Nebel-Knopf (wie Strobe: solange gedrückt wiederholt on=1 senden)
+    // API: fog button (like strobe: send on=1 repeatedly while pressed)
     server.on("/api/fog", HTTP_GET, [](AsyncWebServerRequest *req){
         const unsigned long FOG_KEEPALIVE_MS = 600;
         if (req->hasParam("on")) {
@@ -160,13 +163,13 @@ void registerShowRoutes() {
         } else { req->send(400, "text/plain", "Error"); }
     });
 
-    // API: Zeitplan "aus" überstimmen (Licht jetzt an, bis zum nächsten Wechsel)
+    // API: override schedule "off" (lights on now, until the next change)
     server.on("/api/scheduleOverride", HTTP_GET, [](AsyncWebServerRequest *req){
         state.scheduleOverride = !req->hasParam("on") || req->getParam("on")->value().toInt() != 0;
         req->send(200, "text/plain", "OK");
     });
 
-    // API: Energie eines Presets für die intelligente Auto-Show (0 egal, 1 ruhig, 2 mittel, 3 wild)
+    // API: energy of a preset for the smart auto show (0 any, 1 calm, 2 medium, 3 wild)
     server.on("/api/presetEnergy", HTTP_GET, [](AsyncWebServerRequest *req){
         int id = req->hasParam("id") ? req->getParam("id")->value().toInt() : -1;
         int e = req->hasParam("e") ? req->getParam("e")->value().toInt() : 0;
@@ -177,7 +180,7 @@ void registerShowRoutes() {
         req->send(200, "text/plain", "OK");
     });
 
-    // --- Eigene Lauflichter ---
+    // --- Custom chases ---
     server.on("/api/chases", HTTP_GET, [](AsyncWebServerRequest *req){
         StateLock lock;
         JsonDocument doc;
@@ -202,7 +205,7 @@ void registerShowRoutes() {
         req->send(200, "application/json", json);
     });
 
-    // Lauflicht speichern: slot=1..4, Body {name, width, steps, smooth, cells:[16×8 "#rrggbb"]}
+    // Save chase: slot=1..4, body {name, width, steps, smooth, cells:[16×8 "#rrggbb"]}
     server.on("/api/saveChase", HTTP_POST, [](AsyncWebServerRequest *req){}, NULL,
     [](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total){
         const char *body = collectBody(req, data, len, index, total);
@@ -232,7 +235,7 @@ void registerShowRoutes() {
         req->send(200, "text/plain", "OK");
     });
 
-    // --- Cue-Liste ---
+    // --- Cue list ---
     server.on("/api/cues", HTTP_GET, [](AsyncWebServerRequest *req){
         StateLock lock;
         JsonDocument doc;
@@ -275,12 +278,12 @@ void registerShowRoutes() {
         req->send(200, "text/plain", "OK");
     });
 
-    // API: Cue-Liste steuern: action=start|stop|next
+    // API: control cue list: action=start|stop|next
     server.on("/api/cue", HTTP_GET, [](AsyncWebServerRequest *req){
         String action = req->hasParam("action") ? req->getParam("action")->value() : "";
         StateLock lock;
         if (action == "start" && !state.cues.empty()) {
-            state.autoShow = false;   // Auto-Show und Cue-Liste schließen sich aus
+            state.autoShow = false;   // Auto show and cue list are mutually exclusive
             state.cueRunning = true;
             state.cueRestart = true;
         } else if (action == "stop") {
@@ -294,7 +297,7 @@ void registerShowRoutes() {
         req->send(200, "text/plain", "OK");
     });
 
-    // API: Mikrofon einmessen. step=silence|music|apply|cancel; ohne step: Status
+    // API: calibrate microphone. step=silence|music|apply|cancel; without step: status
     server.on("/api/calibrate", HTTP_GET, [](AsyncWebServerRequest *req){
         String step = req->hasParam("step") ? req->getParam("step")->value() : "";
         String message;
@@ -326,7 +329,7 @@ void registerShowRoutes() {
         req->send(200, "application/json", json);
     });
 
-    // Aktuelle Einstellungen als Preset speichern (gleicher Name = überschreiben)
+    // Save current settings as preset (same name = overwrite)
     server.on("/api/savePreset", HTTP_GET, [](AsyncWebServerRequest *req){
         String name = req->hasParam("name") ? req->getParam("name")->value() : "";
         name.trim();
@@ -346,7 +349,7 @@ void registerShowRoutes() {
             target = &state.presets.back();
             target->name = name;
         }
-        *target = capturePreset(name); // inkl. Gruppen und Palette
+        *target = capturePreset(name); // incl. groups and palette
         markConfigDirty();
         req->send(200, "text/plain", "OK");
     });
@@ -376,7 +379,7 @@ void registerShowRoutes() {
         req->send(200, "text/plain", "OK");
     });
 
-    // --- NEU: API für Audio Threshold (Noise Gate) ---
+    // --- API for audio threshold (noise gate) ---
     server.on("/api/setThreshold", HTTP_GET, [](AsyncWebServerRequest *req){
         if (req->hasParam("value")) {
             state.audioThreshold = req->getParam("value")->value().toInt();
@@ -385,7 +388,7 @@ void registerShowRoutes() {
         } else { req->send(400, "text/plain", "Error"); }
     });
 
-    // API: Drop-Erkennung an/aus
+    // API: drop detection on/off
     server.on("/api/setDrop", HTTP_GET, [](AsyncWebServerRequest *req){
         if (req->hasParam("on")) {
             state.dropEnabled = req->getParam("on")->value().toInt() != 0;
@@ -395,8 +398,8 @@ void registerShowRoutes() {
         } else { req->send(400, "text/plain", "Error"); }
     });
 
-    // API: Strobe-Knopf. Die UI sendet on=1 wiederholt, solange der Knopf gedrückt ist;
-    // bleibt das aus (Verbindung weg), endet der Strobe nach STROBE_KEEPALIVE_MS von selbst
+    // API: strobe button. The UI sends on=1 repeatedly while the button is held;
+    // if that stops (connection lost), the strobe ends by itself after STROBE_KEEPALIVE_MS
     server.on("/api/strobe", HTTP_GET, [](AsyncWebServerRequest *req){
         const unsigned long STROBE_KEEPALIVE_MS = 600;
         if (req->hasParam("on")) {
@@ -406,7 +409,7 @@ void registerShowRoutes() {
         } else { req->send(400, "text/plain", "Error"); }
     });
 
-    // --- NEU: API für BPM (für Motor-Test in der MH-UI) ---
+    // --- API for BPM (for the motor test in the MH UI) ---
     server.on("/api/setBPM", HTTP_GET, [](AsyncWebServerRequest *req){
         if (req->hasParam("value")) {
             state.bpm = req->getParam("value")->value().toInt();
@@ -414,13 +417,13 @@ void registerShowRoutes() {
         } else { req->send(400, "text/plain", "Error"); }
     });
 
-    // API: Standard DMX Steuerung
+    // API: standard DMX control
     server.on("/api/setColor", HTTP_GET, [](AsyncWebServerRequest *req){
         if (req->hasParam("hex")) {
             StateLock lock;
             hexToRGB(req->getParam("hex")->value(), state.colorR, state.colorG, state.colorB);
             state.currentEffect = "static"; 
-            state.activePreset = -1;   // von Hand geändert
+            state.activePreset = -1;   // changed by hand
             state.fadeRequest = true;
             markConfigDirty();
         }
@@ -441,16 +444,16 @@ void registerShowRoutes() {
             StateLock lock;
             if (state.currentEffect != name) state.fadeRequest = true;
             state.currentEffect = name;
-            state.activePreset = -1;   // von Hand geändert
+            state.activePreset = -1;   // changed by hand
             markConfigDirty();
         }
         req->send(200, "text/plain", "OK");
     });
-    // API: Effekt-Geschwindigkeit (Timer) setzen
+    // API: set effect speed (timer)
     server.on("/api/setTimer", HTTP_GET, [](AsyncWebServerRequest *req){
         if (req->hasParam("ms")) {
             state.timerSpeed = constrain(req->getParam("ms")->value().toInt(), TIMER_SPEED_MIN, TIMER_SPEED_MAX);
-            // Damit der Wert nach Neustart bleibt:
+            // So the value survives a restart:
             markConfigDirty(); 
             req->send(200, "text/plain", "OK");
         } else {

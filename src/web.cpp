@@ -12,9 +12,9 @@
 #include "schedule.h"
 #include "mqtt.h"
 
-// Definition des Webservers
+// Web server definition
 AsyncWebServer server(80);  
-AsyncWebSocket ws("/ws");   // Live-Status (Pegel, Beat, Drop, BPM) an die Browser
+AsyncWebSocket ws("/ws");   // Live status (level, beat, drop, BPM) to the browsers
 
 volatile unsigned long lastChangeTime = 0;
 volatile bool configDirty = false;
@@ -24,11 +24,11 @@ volatile bool configSaveNow = false;
 void markConfigDirty() {
     lastChangeTime = millis();
     configDirty = true;
-    state.userTouched = true; // Bedienung → Standby verlassen
+    state.userTouched = true; // Interaction → leave standby
     state.lastUserMs = millis();
 }
 
-// Wird vom Effekt-Task aufgerufen (hält dabei den StateLock)
+// Called by the effect task (holding the StateLock)
 void handleAutoSave() {
     if (configSaveNow || (configDirty && (millis() - lastChangeTime > 5000))) {
         configSaveNow = false;
@@ -38,9 +38,9 @@ void handleAutoSave() {
     }
 }
 
-// Sammelt einen Request-Body, der in mehreren Stücken ankommen kann.
-// Gibt den kompletten Body zurück, sobald das letzte Stück da ist, sonst nullptr.
-// Bei Fehlern wird direkt geantwortet und ebenfalls nullptr zurückgegeben.
+// Collects a request body that may arrive in several chunks.
+// Returns the complete body once the last chunk is there, otherwise nullptr.
+// On errors it responds directly and also returns nullptr.
 const char* collectBody(AsyncWebServerRequest *req, uint8_t *data, size_t len,
                                size_t index, size_t total) {
     if (total == 0 || total > MAX_CONFIG_BODY) {
@@ -53,7 +53,7 @@ const char* collectBody(AsyncWebServerRequest *req, uint8_t *data, size_t len,
         return nullptr;
     }
     memcpy((uint8_t*)req->_tempObject + index, data, len);
-    if (index + len < total) return nullptr; // Warten auf weitere Stücke
+    if (index + len < total) return nullptr; // Wait for more chunks
     return (const char*)req->_tempObject;
 }
 
@@ -68,8 +68,8 @@ void hexToRGB(String hex, uint8_t &r, uint8_t &g, uint8_t &b) {
 String buildStatusJson(bool beat) {
     JsonDocument doc;
     {
-        // Aktueller Effekt + Preset, damit alle Browser die Auswahl richtig anzeigen –
-        // auch wenn Auto-Show, Cue-Liste, Taster o. Ä. gewechselt haben
+        // Current effect + preset so that all browsers show the right selection –
+        // even when auto show, cue list, buttons etc. switched
         StateLock lock;
         doc["effect"] = state.currentEffect;
         doc["preset"] = state.activePreset;
@@ -95,7 +95,7 @@ String buildStatusJson(bool beat) {
                  ((long)(state.fogUntil - now) > 0 || (long)(state.manualFogUntil - now) > 0);
     JsonArray spec = doc["spec"].to<JsonArray>();
     for (int i = 0; i < 16; i++) spec.add(state.spectrum[i]);
-    doc["audioThreshold"] = state.audioThreshold; // Für den Slider-Sync
+    doc["audioThreshold"] = state.audioThreshold; // For slider sync
 
     String json;
     serializeJson(doc, json);
@@ -109,7 +109,7 @@ void handleLiveStatus() {
 
     unsigned long now = millis();
     if (now - lastCleanup > 1000) {
-        ws.cleanupClients(); // getrennte Browser aufräumen
+        ws.cleanupClients(); // clean up disconnected browsers
         lastCleanup = now;
     }
     if (ws.count() == 0) return;
@@ -118,7 +118,7 @@ void handleLiveStatus() {
     bool beat = beats != lastBeatCount;
     bool changed = beat || state.drop != lastDrop || state.blackout != lastBlackout;
     if (!changed && now - lastPush < 100) return;
-    if (!ws.availableForWriteAll()) return; // ein Browser hängt → diesen Durchlauf auslassen
+    if (!ws.availableForWriteAll()) return; // a browser is stuck → skip this round
 
     ws.textAll(buildStatusJson(beat));
     lastPush = now;
@@ -127,7 +127,7 @@ void handleLiveStatus() {
     lastBlackout = state.blackout;
 }
 
-// Fügt ein Preset als JSON-Objekt an (für /api/presets)
+// Appends a preset as JSON object (for /api/presets)
 void presetToJson(JsonArray arr, int id, const Preset &p) {
     JsonObject o = arr.add<JsonObject>();
     o["id"]     = id;
@@ -142,15 +142,15 @@ void presetToJson(JsonArray arr, int id, const Preset &p) {
 }
 
 bool adminAuthorized(AsyncWebServerRequest *req) {
-    if (authActive()) return true;   // hat die Middleware schon geprüft
+    if (authActive()) return true;   // already checked by the middleware
     if (req->authenticate(OTA_USER, OTA_PASSWORD)) return true;
     req->requestAuthentication();
     return false;
 }
 
 void setupWeb() {
-    // Passwortschutz für alles (Seiten, APIs, WebSocket) – nur wenn eingeschaltet.
-    // Basic-Auth, weil Browser sie zuverlässig auch beim WebSocket mitschicken.
+    // Password protection for everything (pages, APIs, WebSocket) – only when enabled.
+    // Basic auth, because browsers reliably send it with the WebSocket too.
     server.addMiddleware([](AsyncWebServerRequest *req, ArMiddlewareNext next) {
         if (authActive() && !req->authenticate(state.authUser.c_str(), state.authPass.c_str())) {
             req->requestAuthentication(AsyncAuthType::AUTH_BASIC, "DMX-Controller");
@@ -159,29 +159,30 @@ void setupWeb() {
         next();
     });
 
-    // --- Statische Dateien (Lokal vom ESP32) ---
+    // --- Static files (local on the ESP32) ---
     server.serveStatic("/moving_head.html", LittleFS, "/moving_head.html");
     server.serveStatic("/nipplejs.min.js", LittleFS, "/nipplejs.min.js");
     server.serveStatic("/style.css", LittleFS, "/style.css");
     server.serveStatic("/index.js", LittleFS, "/index.js");
+    server.serveStatic("/i18n.js", LittleFS, "/i18n.js");
     server.serveStatic("/logo.svg", LittleFS, "/logo.svg");
 
-    // API: Live Status (inkl. Audio-Daten für UI)
-    // (Fallback, falls der WebSocket nicht verbunden ist)
+    // API: live status (incl. audio data for the UI)
+    // (fallback if the WebSocket is not connected)
     server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *req){
-        bool beat = (millis() - state.lastBeatMs) < 150; // kurz "halten", damit die UI ihn sieht
+        bool beat = (millis() - state.lastBeatMs) < 150; // "hold" briefly so the UI sees it
         req->send(200, "application/json", buildStatusJson(beat));
     });
 
-    // Routen nach Themen (siehe web_show.cpp, web_fixtures.cpp, web_system.cpp)
+    // Routes by topic (see web_show.cpp, web_fixtures.cpp, web_system.cpp)
     registerShowRoutes();
     registerFixtureRoutes();
     registerSystemRoutes();
 
-    // WebSocket für den Live-Status
+    // WebSocket for the live status
     server.addHandler(&ws);
 
-    // Navigation & Default Pages
+    // Navigation & default pages
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *req){ req->send(LittleFS, "/index.html", "text/html"); });
     server.on("/wifi", HTTP_GET, [](AsyncWebServerRequest *req){ req->send(LittleFS, "/wifi.html", "text/html"); });
     server.on("/dmxconfig", HTTP_GET, [](AsyncWebServerRequest *req){ req->send(LittleFS, "/dmxconfig.html", "text/html"); });
@@ -189,7 +190,7 @@ void setupWeb() {
     server.on("/monitor", HTTP_GET, [](AsyncWebServerRequest *req){ req->send(LittleFS, "/monitor.html", "text/html"); });
     server.on("/lauflicht", HTTP_GET, [](AsyncWebServerRequest *req){ req->send(LittleFS, "/lauflicht.html", "text/html"); });
 
-    setupOTA(); // Update-Seite /update + ArduinoOTA
+    setupOTA(); // Update page /update + ArduinoOTA
 
     server.begin();
     Serial.println("Webserver mit allen MH & Audio Erweiterungen gestartet.");

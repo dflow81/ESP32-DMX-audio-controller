@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DMX Monitor</title>
     <link rel="stylesheet" href="/style.css">
+    <script src="/i18n.js"></script>
     <style>
         .mon-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
         .mon-head .info { font-size: 12px; color: #888; flex: 1; }
@@ -80,7 +81,7 @@
 </div>
 
 <script>
-// Funktion eines Kanals → Kürzel + Farbe
+// Function of a channel → abbreviation + color
 const FUNCS = [
     ["offsetDimmer", "Dim", "#ffd54f"],
     ["offsetR", "R", "#ff5252"],
@@ -95,10 +96,10 @@ const FUNCS = [
     ["offsetFocus", "Fok", "#ffab40"]
 ];
 
-let cells = [];        // Index = Kanal-1 → {bar, val}
+let cells = [];        // index = channel-1 → {bar, val}
 let paused = false;
 let config = null;
-let builtFor = -1;     // Kanalanzahl, für die das Raster gebaut wurde
+let builtFor = -1;     // channel count the grid was built for
 
 function makeCell(ch, fn, color) {
     const cell = document.createElement("div");
@@ -136,7 +137,7 @@ function addBlock(title, sub, channels) {
     document.getElementById("blocks").appendChild(block);
 }
 
-// Raster bauen: ein Block pro Fixture, danach alle übrigen gesendeten Kanäle
+// Build the grid: one block per fixture, then all other sent channels
 function build(total) {
     document.getElementById("blocks").innerHTML = "";
     cells = [];
@@ -173,7 +174,7 @@ function poll() {
             if (data.length !== builtFor) build(data.length);
             for (let i = 0; i < data.length; i++) {
                 const c = cells[i];
-                if (!c || c.last === data[i]) continue; // nur Änderungen zeichnen
+                if (!c || c.last === data[i]) continue; // only draw changes
                 c.last = data[i];
                 c.val.textContent = data[i];
                 c.bar.style.height = (data[i] / 255 * 100) + "%";
@@ -184,7 +185,7 @@ function poll() {
         .catch(() => document.getElementById("info").textContent = "Keine Verbindung …");
 }
 
-// --- Kanaltest ---
+// --- Channel test ---
 function buildTest() {
     const start = Math.max(1, Math.min(505, parseInt(document.getElementById("testStart").value) || 1));
     const box = document.getElementById("testSliders");
@@ -202,7 +203,7 @@ function buildTest() {
         let timer = null;
         slider.oninput = () => {
             val.textContent = slider.value;
-            if (timer) return;   // höchstens ~12 Anfragen pro Sekunde
+            if (timer) return;   // at most ~12 requests per second
             timer = setTimeout(() => {
                 timer = null;
                 fetch(`/api/testChannel?ch=${ch}&v=${slider.value}`);
@@ -224,7 +225,7 @@ function togglePause() {
     document.getElementById("pauseBtn").textContent = paused ? "Weiter" : "Pause";
 }
 
-// Auslastung der Tasks (Core 0: Audio + Display, Core 1: Effekte + DMX + Web)
+// Task load (core 0: audio + display, core 1: effects + DMX + web)
 function pollLoad() {
     if (document.hidden) return;
     fetch("/api/load").then(r => r.json()).then(l => {

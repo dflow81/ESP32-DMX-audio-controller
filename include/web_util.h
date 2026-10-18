@@ -3,26 +3,26 @@
 #include <ArduinoJson.h>
 #include "state.h"
 
-// Gemeinsame Helfer für die Web-Routen (definiert in web.cpp)
+// Shared helpers for the web routes (defined in web.cpp)
 
-// Max. Größe eines Request-Bodys (Config, Cue-Liste, Lauflicht, Backup)
+// Max. size of a request body (config, cue list, chase, backup)
 #define MAX_CONFIG_BODY 16384
 
-// Config sofort speichern lassen (statt nach 5 s), erledigt der Effekt-Task
+// Have the config saved immediately (instead of after 5 s), done by the effect task
 extern volatile bool configSaveNow;
 
-// Sammelt einen Request-Body, der in mehreren Stücken ankommen kann.
-// Gibt den kompletten Body zurück, sobald das letzte Stück da ist, sonst nullptr.
+// Collects a request body that may arrive in several chunks.
+// Returns the complete body once the last chunk is there, otherwise nullptr.
 const char* collectBody(AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total);
 
 void hexToRGB(String hex, uint8_t &r, uint8_t &g, uint8_t &b);
 void presetToJson(JsonArray arr, int id, const Preset &p);
 
-// Zugriff auf Update/Backup: mit Passwortschutz reicht dessen Login (prüft die Middleware),
-// ohne Passwortschutz gilt der Update-Login aus ota.h. Fordert bei Bedarf die Anmeldung an.
+// Access to update/backup: with password protection its login suffices (checked by the middleware),
+// without password protection the update login from ota.h applies. Requests authentication if needed.
 bool adminAuthorized(AsyncWebServerRequest *req);
 
-// Routen nach Themen
+// Routes by topic
 void registerShowRoutes();      // web_show.cpp
 void registerFixtureRoutes();   // web_fixtures.cpp
 void registerSystemRoutes();    // web_system.cpp

@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>MH Control Center</title>
     <link rel="stylesheet" href="/style.css">
+    <script src="/i18n.js"></script>
     <style>
         :root { --bg: #121212; --card: #1e1e1e; --primary: #007bff; --secondary: #28a745; --warn: #ff8800; --text: #e0e0e0; }
         body { font-family: sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 0; user-select: none; touch-action: manipulation; }
@@ -108,7 +109,7 @@
 
 </div>
 
-<!-- nipplejs lokal vom ESP32 laden -->
+<!-- load nipplejs locally from the ESP32 -->
 <script src="/nipplejs.min.js"></script>
 
 <script>
@@ -116,7 +117,7 @@
     let lastTs = 0;
     let isTesting = false;
 
-    // 1. Fixture Liste laden
+    // 1. Load fixture list
     function loadList() {
         fetch('/api/fixtures')
             .then(res => res.json())
@@ -145,7 +146,7 @@
             .catch(e => setStatus("Fehler beim Auswählen!", true));
     }
 
-    // Bewegungsmuster (gilt für alle Heads)
+    // Movement pattern (applies to all heads)
     function loadMovement() {
         fetch('/api/getConfig').then(r => r.json()).then(cfg => {
             if (cfg.movePattern !== undefined) document.getElementById('movePattern').value = String(cfg.movePattern);
@@ -159,7 +160,7 @@
         fetch(`/api/settings?movePattern=${p}&moveSpread=${s}`).then(() => setStatus("Bewegung gespeichert"));
     }
 
-    // Zusatzkanäle: nur die anzeigen, die der Fixture-Typ hat (in der DMX-Config einstellbar)
+    // Extra channels: only show those the fixture type has (configurable in the DMX config)
     const EXTRA_LABELS = { gobo: "Gobo", colorWheel: "Farbrad", prism: "Prisma", focus: "Fokus" };
     let extraTimer = {};
 
@@ -184,7 +185,7 @@
 
             slider.oninput = () => {
                 val.textContent = slider.value;
-                // erst senden, wenn der Regler 100 ms ruht (schont den ESP)
+                // only send once the slider rests for 100 ms (spares the ESP)
                 clearTimeout(extraTimer[key]);
                 extraTimer[key] = setTimeout(() =>
                     fetch(`/api/setExtra?id=${currentId}&ch=${key}&v=${slider.value}`), 100);
@@ -208,7 +209,7 @@
             .catch(e => setStatus("Fehler beim Senden!", true));
     }
 
-    // 2. Motor-Test Logik
+    // 2. Motor test logic
     function toggleTestMove() {
         const btn = document.getElementById('testBtn');
         isTesting = !isTesting;
@@ -216,8 +217,8 @@
         if (isTesting) {
             btn.style.background = "#dc3545";
             btn.innerText = "TEST LÄUFT... (STOPP)";
-            fetch('/api/setBPM?value=120'); // Sicherstellen, dass BPM > 30 ist
-            if (currentId !== "-1") fetch(`/api/setAuto?id=${currentId}&on=1`); // gewählter Head bewegt sich mit
+            fetch('/api/setBPM?value=120'); // make sure BPM > 30
+            if (currentId !== "-1") fetch(`/api/setAuto?id=${currentId}&on=1`); // the selected head moves along
             fetch('/api/setEffect?name=disco');
             setStatus("Test-Modus: Disco-Bewegung aktiv");
         } else {
@@ -236,7 +237,7 @@
         if(!err) setTimeout(() => led.className = "led", 1000);
     }
 
-    // 3. Joystick Setup
+    // 3. Joystick setup
     const joy = nipplejs.create({
         zone: document.getElementById('joy-zone'),
         mode: 'static',
@@ -248,15 +249,15 @@
     joy.on('move', (evt, data) => {
         if (currentId === "-1") return;
         let now = Date.now();
-        if (now - lastTs > 50) { // 20 FPS Limiter
-            // frontPosition geht von -70 bis +70 (halbe Joystick-Größe) → auf 0…255 skalieren
+        if (now - lastTs > 50) { // 20 FPS limiter
+            // frontPosition goes from -70 to +70 (half the joystick size) → scale to 0…255
             const r = 70;
             let p = Math.round(127.5 + data.instance.frontPosition.x / r * 127.5);
             let t = Math.round(127.5 + data.instance.frontPosition.y / r * 127.5);
             p = Math.max(0, Math.min(255, p));
             t = Math.max(0, Math.min(255, t));
             
-            // Schnelles Senden via XHR
+            // fast sending via XHR
             let x = new XMLHttpRequest();
             x.open("GET", `/api/move?id=${currentId}&p=${p}&t=${t}`, true);
             x.send();
@@ -264,7 +265,7 @@
         }
     });
 
-    // Positionen
+    // Positions
     function loadPositions() {
         fetch('/api/positions').then(r => r.json()).then(list => {
             const box = document.getElementById('positions');

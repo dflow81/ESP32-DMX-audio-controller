@@ -1,17 +1,17 @@
 #pragma once
 #include <Arduino.h>
 
-// Steuerung durch PC-Lichtsoftware (QLC+, Freestyler, …) per Art-Net oder sACN (E1.31).
-// Solange Daten für das eingestellte Universum ankommen, gibt der ESP diese 1:1 aus;
-// bleiben sie NET_TIMEOUT_MS aus, läuft wieder die normale Effekt-Steuerung.
+// Control by PC lighting software (QLC+, Freestyler, …) via Art-Net or sACN (E1.31).
+// While data for the configured universe arrives, the ESP outputs it 1:1;
+// if it stays away for NET_TIMEOUT_MS, the normal effect control runs again.
 #define NET_TIMEOUT_MS 3000
 
-// Startet/stoppt die UDP-Empfänger passend zu state.netInput / state.netUniverse.
-// Nach jeder Änderung der Einstellungen erneut aufrufen.
+// Starts/stops the UDP receivers according to state.netInput / state.netUniverse.
+// Call again after every settings change.
 void setupNetInput();
 
-// true, wenn gerade Netzwerk-Daten ankommen
+// true while network data is arriving
 bool netInputActive();
 
-// Kopiert das zuletzt empfangene DMX-Bild, gibt die Kanalanzahl zurück
+// Copies the last received DMX frame, returns the channel count
 int copyNetDmx(uint8_t *dst);

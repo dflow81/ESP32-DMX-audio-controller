@@ -4,11 +4,11 @@
 #include "state.h"
 
 void setupSchedule() {
-    // SNTP läuft im Hintergrund und versucht es weiter, bis das WLAN verbunden ist
+    // SNTP runs in the background and keeps trying until Wi-Fi is connected
     configTzTime(SCHEDULE_TZ, NTP_SERVER_1, NTP_SERVER_2);
 }
 
-// "HH:MM" → Minuten seit Mitternacht (-1 bei ungültiger Angabe)
+// "HH:MM" → minutes since midnight (-1 if invalid)
 static int parseTime(const String &s) {
     int colon = s.indexOf(':');
     if (colon < 1) return -1;
@@ -28,7 +28,7 @@ String currentTimeString() {
 
 void handleSchedule() {
     static unsigned long lastCheck = 0;
-    static int lastInside = -1;     // -1 = noch nicht ausgewertet
+    static int lastInside = -1;     // -1 = not evaluated yet
     unsigned long nowMs = millis();
     if (nowMs - lastCheck < 1000) return;
     lastCheck = nowMs;
@@ -36,7 +36,7 @@ void handleSchedule() {
     struct tm t;
     state.timeValid = getLocalTime(&t, 0);
     if (!state.timeValid || !state.scheduleOn) {
-        state.scheduleDark = false;   // ohne Uhrzeit oder Zeitplan: Licht an
+        state.scheduleDark = false;   // without time or schedule: lights on
         state.scheduleOverride = false;
         lastInside = -1;
         return;
@@ -49,14 +49,14 @@ void handleSchedule() {
         return;
     }
     int now = t.tm_hour * 60 + t.tm_min;
-    // Zeitfenster darf über Mitternacht gehen (z. B. 18:00 – 02:00)
+    // The time window may cross midnight (e.g. 18:00 – 02:00)
     bool inside = (start < end) ? (now >= start && now < end) : (now >= start || now < end);
 
     if (lastInside == -1) {
-        // Erste Auswertung (Start/Einschalten): nur Zustand übernehmen, kein Preset
+        // First evaluation (start/enable): only take over the state, no preset
         state.scheduleDark = !inside;
     } else if ((int)inside != lastInside) {
-        // Wechsel: manuelles Einschalten gilt nur bis hierhin
+        // Change: a manual override only lasts until here
         state.scheduleOverride = false;
         state.scheduleDark = !inside;
         if (inside && state.schedulePreset.length()) {

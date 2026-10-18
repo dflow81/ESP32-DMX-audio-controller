@@ -8,19 +8,19 @@
 #include "web_util.h"
 
 // ------------------------------------------------------------
-// Gemeinsame Logik für beide Update-Wege
+// Shared logic for both update paths
 // ------------------------------------------------------------
 
-// Die Einstellungen liegen im NVS, ein Dateisystem-Update lässt sie also unberührt.
+// Settings live in NVS, so a file system update leaves them untouched.
 static void beginUpdate(bool fs) {
-    StateLock lock;           // wartet, falls der Effekt-Task gerade speichert
-    state.otaActive = true;   // ab jetzt kein Auto-Save mehr
-    if (fs) LittleFS.end();   // Dateisystem aushängen, bevor es überschrieben wird
+    StateLock lock;           // waits if the effect task is currently saving
+    state.otaActive = true;   // no more auto-save from now on
+    if (fs) LittleFS.end();   // unmount the file system before it is overwritten
     Serial.printf("OTA: Update gestartet (%s)\n", fs ? "Dateisystem" : "Firmware");
 }
 
 // ------------------------------------------------------------
-// Update-Seite (liegt in der Firmware, funktioniert auch ohne Dateisystem)
+// Update page (stored in the firmware, works even without a file system)
 // ------------------------------------------------------------
 static const char UPDATE_PAGE[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 <html lang="de">
@@ -29,6 +29,7 @@ static const char UPDATE_PAGE[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Update - ESP32 DMX Controller</title>
 <link rel="stylesheet" href="/style.css">
+<script src="/i18n.js"></script>
 <style>
   body { background:#111; color:#ddd; font-family:Arial, sans-serif; margin:0; }
   .ota { max-width:520px; margin:20px auto; padding:0 16px; }
@@ -134,7 +135,7 @@ function upload(inputId, type) {
 </html>)rawliteral";
 
 // ------------------------------------------------------------
-// Web-Update (/update)
+// Web update (/update)
 // ------------------------------------------------------------
 static bool webUploadDenied = false;
 static String webUpdateError;
@@ -146,7 +147,7 @@ static void setupWebUpdate() {
     });
 
     server.on("/update", HTTP_POST,
-        // Wird aufgerufen, wenn der Upload komplett ist
+        // Called when the upload is complete
         [](AsyncWebServerRequest *req) {
             if (webUploadDenied) return req->requestAuthentication();
             bool ok = webUpdateError.isEmpty() && !Update.hasError();
@@ -154,10 +155,10 @@ static void setupWebUpdate() {
                                                              ok ? "OK" : webUpdateError.c_str());
             res->addHeader("Connection", "close");
             req->send(res);
-            // Neustart erst nach dem Senden der Antwort (in loop())
+            // Restart only after the response was sent (in loop())
             scheduleRestart(1000);
         },
-        // Wird für jedes Stück der hochgeladenen Datei aufgerufen
+        // Called for every chunk of the uploaded file
         [](AsyncWebServerRequest *req, const String &filename, size_t index,
            uint8_t *data, size_t len, bool final) {
             if (index == 0) {
@@ -189,7 +190,7 @@ static void setupWebUpdate() {
 }
 
 // ------------------------------------------------------------
-// ArduinoOTA (Upload direkt aus PlatformIO per WLAN)
+// ArduinoOTA (upload directly from PlatformIO via Wi-Fi)
 // ------------------------------------------------------------
 static void setupArduinoOTA() {
     ArduinoOTA.setHostname(OTA_HOSTNAME);
@@ -203,9 +204,9 @@ static void setupArduinoOTA() {
     });
     ArduinoOTA.onError([](ota_error_t error) {
         Serial.printf("OTA: Fehler %u\n", error);
-        scheduleRestart(1000); // sauber neu starten (Dateisystem war evtl. ausgehängt)
+        scheduleRestart(1000); // restart cleanly (file system may have been unmounted)
     });
-    ArduinoOTA.begin(); // startet auch mDNS → http://dmx-controller.local
+    ArduinoOTA.begin(); // also starts mDNS → http://dmx-controller.local
 }
 
 void setupOTA() {

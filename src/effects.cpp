@@ -7,14 +7,14 @@
 extern ControllerState state;
 
 // --------------------------------------------------
-// Effekt-Kontext: Effekte laufen auf einer Auswahl von Fixtures
-// (Haupteffekt oder eine Gruppe) mit der Grundfarbe dieser Auswahl.
-// Index k in den Effekten ist lokal (0 … fxCount()-1).
+// Effect context: effects run on a selection of fixtures
+// (main effect or a group) with the base color of that selection.
+// Index k in the effects is local (0 … fxCount()-1).
 // --------------------------------------------------
 struct EffectCtx {
     const std::vector<int> *idx;
     uint8_t r, g, b;
-    int slot;   // 0 = Haupteffekt, 1…GROUP_COUNT = Gruppe (für Effekt-interne Zustände)
+    int slot;   // 0 = main effect, 1…GROUP_COUNT = group (for effect-internal state)
 };
 static EffectCtx ctx = {nullptr, 255, 0, 0, 0};
 static std::vector<int> allFixtures;
@@ -25,7 +25,7 @@ static void fxColor(int k, uint8_t r, uint8_t g, uint8_t b, uint8_t w) {
     setFixtureColor(fxGlobal(k), r, g, b, w);
 }
 
-// Kontext auf alle Fixtures + Grundfarbe setzen (Strobe, Drop)
+// Set context to all fixtures + base color (strobe, drop)
 static void useAllFixtures() {
     allFixtures.resize(state.fixtures.size());
     for (size_t i = 0; i < allFixtures.size(); i++) allFixtures[i] = i;
@@ -33,7 +33,7 @@ static void useAllFixtures() {
 }
 
 // --------------------------------------------------
-// Farbpalette: Position (in Paletten-Farben) → Farbe, weich überblendet und zyklisch
+// Color palette: position (in palette colors) → color, smoothly blended and cyclic
 // --------------------------------------------------
 static void paletteAt(float pos, uint8_t &r, uint8_t &g, uint8_t &b) {
     const Palette &p = state.palette;
@@ -48,7 +48,7 @@ static void paletteAt(float pos, uint8_t &r, uint8_t &g, uint8_t &b) {
     b = a[2] + (c[2] - a[2]) * f;
 }
 
-// Zufällige Paletten-Farbe (ohne Überblenden)
+// Random palette color (without blending)
 static void paletteRandom(uint8_t &r, uint8_t &g, uint8_t &b) {
     int n = constrain((int)state.palette.size, 2, PALETTE_MAX);
     const uint8_t *c = state.palette.c[random(0, n)];
@@ -57,46 +57,46 @@ static void paletteRandom(uint8_t &r, uint8_t &g, uint8_t &b) {
 
 static void runEffectNamed(const String& name);
 
-// Buffer für Sparkle (Index = globaler Fixture-Index)
+// Buffer for sparkle (index = global fixture index)
 static std::vector<uint8_t> sparkleBuf;
 
-// Zentrale "Uhr" aller Effekte: Position in Effekt-Schritten.
-// Normal:    1 Schritt = timerSpeed ms (Speed-Regler)
-// Im Takt:   1 Schritt = 1/stepsPerBeat Beat; die Schritte liegen genau auf den
-//            erkannten (oder getappten) Beats, weil sie aus dem Beat-Zähler kommen
+// Central "clock" of all effects: position in effect steps.
+// Normal:    1 step = timerSpeed ms (speed slider)
+// On beat:   1 step = 1/stepsPerBeat beat; the steps land exactly on the
+//            detected (or tapped) beats because they come from the beat counter
 static double stepPos() {
     if (state.beatSync && state.bpm >= 30) {
         double interval = 60000.0 / state.bpm;
-        double frac = (millis() - state.lastBeatMs) / interval; // Anteil bis zum nächsten Beat
+        double frac = (millis() - state.lastBeatMs) / interval; // fraction until the next beat
         if (frac < 0) frac = 0;
-        if (frac > 0.999) frac = 0.999; // nicht über den nächsten (noch nicht erkannten) Beat hinaus
+        if (frac > 0.999) frac = 0.999; // not beyond the next (not yet detected) beat
         return (state.beatCount + frac) * state.stepsPerBeat;
     }
     return millis() / (double)max(1, state.timerSpeed);
 }
 
-// Aktueller Schritt (für Chase, Bounce …) und Fortschritt innerhalb des Schritts (0…1)
+// Current step (for chase, bounce …) and progress within the step (0…1)
 static long   stepIndex() { return (long)stepPos(); }
 
-// Effekt-Parameter: Breite (leuchtende Lampen) und Intensität (k = 1.0 bei 50 %)
+// Effect parameters: width (lit lamps) and intensity (k = 1.0 at 50 %)
 static int   fxWidth() { return constrain((int)state.fxWidth, 1, 8); }
 static float fxK()     { return state.fxIntensity / 50.0f; }
 
-// Lampe k liegt im "Fenster" der Breite fxWidth() ab Position pos (mit Umlauf)
+// Lamp k lies within the "window" of width fxWidth() starting at position pos (wrapping)
 static bool inWindow(int k, int pos) {
     int n = fxCount();
     int d = ((k - pos) % n + n) % n;
     return d < fxWidth();
 }
 
-// Für die Moving Heads: aktueller Effekt-Schritt (Takt-Raster)
+// For the moving heads: current effect step (beat grid)
 long effectStepIndex() { return stepIndex(); }
 
-// Auslöser für Farbwechsel der Disco-Effekte:
-// "Im Takt" an → bei jedem neuen Effekt-Schritt (½ / 1 / 2 Beats, wie eingestellt),
-// sonst wie bisher bei jedem erkannten Beat. Merkt sich den Schritt je Effekt und Slot.
+// Trigger for color changes of the disco effects:
+// "On beat" enabled → on every new effect step (½ / 1 / 2 beats, as configured),
+// otherwise as before on every detected beat. Remembers the step per effect and slot.
 static bool colorChangeDue(int effectId) {
-    static long lastStep[3][GROUP_COUNT + 1];   // 0 = Disco, 1 = Disco2, 2 = Pump
+    static long lastStep[3][GROUP_COUNT + 1];   // 0 = disco, 1 = disco2, 2 = pump
     static bool init = false;
     if (!init) { for (auto &row : lastStep) for (long &v : row) v = -1; init = true; }
 
@@ -109,12 +109,12 @@ static bool colorChangeDue(int effectId) {
 }
 static double stepPhase() { double p = stepPos(); return p - floor(p); }
 
-// Zeitfaktor für die Wellen-Effekte (gleiche Einheit wie bisher: Schritte)
+// Time factor for the wave effects (same unit as before: steps)
 float getT() {
     return (float)stepPos();
 }
 
-// Hilfsfunktion: Ping-Pong-Position (0 … n-1 … 0)
+// Helper: ping-pong position (0 … n-1 … 0)
 static int bouncePos() {
     int n = fxCount();
     if (n < 2) return 0;
@@ -141,7 +141,7 @@ void effectColorFade() {
     uint8_t r = (sin(t) * 127) + 128;
     uint8_t g = (sin(t + 2.09f) * 127) + 128;
     uint8_t b = (sin(t + 4.18f) * 127) + 128;
-    // Palette: gleiche Geschwindigkeit, aber durch die Paletten-Farben statt durch den Farbkreis
+    // Palette: same speed, but through the palette colors instead of the color wheel
     if (state.palette.on) paletteAt(t / TWO_PI * state.palette.size, r, g, b);
 
     for (int i = 0; i < fxCount(); i++) {
@@ -170,7 +170,7 @@ void effectRainbowWave() {
 // --------------------------------------------------
 // CHASE
 // --------------------------------------------------
-// Farbe für Chase/Bounce/Pulse: Rot, mit Palette pro Durchlauf die nächste Farbe
+// Color for chase/bounce/pulse: red, with palette the next color per round
 static void runnerColor(long round, uint8_t &r, uint8_t &g, uint8_t &b) {
     r = 255; g = 0; b = 0;
     if (state.palette.on) {
@@ -219,7 +219,7 @@ void effectDualWave() {
         uint8_t g = (1 - v) * 127;
         uint8_t b = 50;
         if (state.palette.on) {
-            // zwischen Paletten-Farbe 1 und 2 hin und her
+            // back and forth between palette color 1 and 2
             float f = (v + 1) / 2;
             const uint8_t *a = state.palette.c[0], *c = state.palette.c[1];
             r = a[0] + (c[0] - a[0]) * f;
@@ -238,7 +238,7 @@ void effectPulse() {
     float t = getT();
     uint8_t v = (sin(t) * 127) + 128;
     uint8_t r, g, b;
-    runnerColor((long)(t / TWO_PI), r, g, b); // mit Palette: pro Puls die nächste Farbe
+    runnerColor((long)(t / TWO_PI), r, g, b); // with palette: next color per pulse
 
     for (int i = 0; i < fxCount(); i++) {
         fxColor(i, r * v / 255, g * v / 255, b * v / 255, 255);
@@ -254,7 +254,7 @@ void effectSparkle() {
     for (int i = 0; i < fxCount(); i++) {
         uint8_t &s = sparkleBuf[fxGlobal(i)];
 
-        if (random(0, 1000) < 30 * fxK())     // Dichte (3 % pro Bild bei 50)
+        if (random(0, 1000) < 30 * fxK())     // density (3 % per frame at 50)
             s = 255;
 
         s = s > 5 ? s - 5 : 0;
@@ -267,7 +267,7 @@ void effectSparkle() {
 // STROBE
 // --------------------------------------------------
 void effectStrobe() {
-    uint8_t v = (stepPhase() < constrain(0.25f * fxK(), 0.02f, 0.9f)) ? 255 : 0;  // Blitzlänge
+    uint8_t v = (stepPhase() < constrain(0.25f * fxK(), 0.02f, 0.9f)) ? 255 : 0;  // flash length
 
     for (int i = 0; i < fxCount(); i++) {
         fxColor(i, v, v, v, 255);
@@ -279,7 +279,7 @@ void effectStrobe() {
 // --------------------------------------------------
 void effectFire() {
     for (int i = 0; i < fxCount(); i++) {
-        int low = constrain((int)(255 - 105 * fxK()), 0, 254);   // Flackerstärke
+        int low = constrain((int)(255 - 105 * fxK()), 0, 254);   // flicker strength
         uint8_t heat = random(low, 255);
 
         uint8_t r = heat;
@@ -295,7 +295,7 @@ void effectFire() {
 // --------------------------------------------------
 void effectCandle() {
     for (int i = 0; i < fxCount(); i++) {
-        int f = 20 * fxK();                                      // Flackerstärke
+        int f = 20 * fxK();                                      // flicker strength
         uint8_t base = constrain(180 + (int)random(-f, f + 1), 0, 255);
         fxColor(i, base, base * 0.6, 0, 255);
     }
@@ -352,7 +352,7 @@ void effectSunset() {
 // FULL STROBE
 // --------------------------------------------------
 void effectFullStrobe() {
-    uint8_t v = (stepPhase() < constrain(0.2f * fxK(), 0.02f, 0.9f)) ? 255 : 0;   // Blitzlänge
+    uint8_t v = (stepPhase() < constrain(0.2f * fxK(), 0.02f, 0.9f)) ? 255 : 0;   // flash length
 
     for (int i = 0; i < fxCount(); i++) {
         fxColor(i, v, v, v, 255);
@@ -364,7 +364,7 @@ void effectFullStrobe() {
 // --------------------------------------------------
 void effectRandomStrobe() {
     for (int i = 0; i < fxCount(); i++) {
-        uint8_t v = (random(0, 1000) < 100 * fxK()) ? 255 : 0;   // Dichte
+        uint8_t v = (random(0, 1000) < 100 * fxK()) ? 255 : 0;   // density
         fxColor(i, v, v, v, 255);
     }
 }
@@ -407,60 +407,60 @@ void effectDimmerBounce() {
 
 //
 // --------------------------------------------------
-// DISCO (Audio Beat → Farbwechsel)
+// DISCO (audio beat → color change)
 // --------------------------------------------------
 void effectDisco() {
-    // (Drops werden zentral behandelt, siehe effectDropReaction)
+    // (drops are handled centrally, see effectDropReaction)
 
-    // Aktuelle Disco-Farbe je Haupteffekt/Gruppe
+    // Current disco color per main effect/group
     static uint8_t color[GROUP_COUNT + 1][3] = {{255, 0, 0}};
     uint8_t *c = color[ctx.slot];
 
-    // --- NORMALER DISCO BEAT (bzw. Schritt, wenn "Im Takt" an ist) ---
+    // --- NORMAL DISCO BEAT (or step when "on beat" is enabled) ---
     if (colorChangeDue(0)) {
-        // Bei jedem Schlag eine neue Zufallsfarbe für alle (mit Palette: aus der Palette)
+        // New random color for all on every beat (with palette: from the palette)
         if (state.palette.on) paletteRandom(c[0], c[1], c[2]);
         else { c[0] = random(0, 255); c[1] = random(0, 255); c[2] = random(0, 255); }
     }
 
-    // Farbe auf alle Fixtures anwenden
+    // Apply color to all fixtures
     for (int i = 0; i < fxCount(); i++) {
         fxColor(i, c[0], c[1], c[2], 255);
     }
 }
 
 void effectDisco2() {
-    // 1. Die 8 vordefinierten, kräftigen Farben
+    // 1. The 8 predefined, strong colors
     static const uint8_t palette[8][3] = {
-        {255, 0, 0},   // Rot
-        {0, 255, 0},   // Grün
-        {0, 0, 255},   // Blau
-        {255, 255, 0}, // Gelb
-        {255, 0, 255}, // Magenta
-        {0, 255, 255}, // Cyan
-        {255, 127, 0}, // Orange
-        {255, 50, 50}  // Pastell-Rot
+        {255, 0, 0},   // red
+        {0, 255, 0},   // green
+        {0, 0, 255},   // blue
+        {255, 255, 0}, // yellow
+        {255, 0, 255}, // magenta
+        {0, 255, 255}, // cyan
+        {255, 127, 0}, // orange
+        {255, 50, 50}  // pastel red
     };
 
-    // Speichert, welche Farbe gerade für welches Fixture aktiv ist
+    // Stores which color is currently active for which fixture
     static std::vector<int> fixtureColorIdx;
 
     if (fixtureColorIdx.size() < state.fixtures.size()) fixtureColorIdx.resize(state.fixtures.size(), 0);
 
-    // (Drops werden zentral behandelt, siehe effectDropReaction)
+    // (drops are handled centrally, see effectDropReaction)
 
-    // Eigene Palette statt der 8 festen Farben, wenn eingeschaltet
+    // Own palette instead of the 8 fixed colors, if enabled
     bool own = state.palette.on;
     int count = own ? constrain((int)state.palette.size, 2, PALETTE_MAX) : 8;
 
-    // --- NORMALER BEAT (Farbwechsel; bzw. Schritt, wenn "Im Takt" an ist) ---
+    // --- NORMAL BEAT (color change; or step when "on beat" is enabled) ---
     if (colorChangeDue(1)) {
         for (int i = 0; i < fxCount(); i++) {
-            fixtureColorIdx[fxGlobal(i)] = random(0, count); // Neue Zufallsfarbe aus Palette
+            fixtureColorIdx[fxGlobal(i)] = random(0, count); // New random color from the palette
         }
     }
 
-    // Farben auf Lampen anwenden
+    // Apply colors to the lamps
     for (int i = 0; i < fxCount(); i++) {
         int idx = fixtureColorIdx[fxGlobal(i)] % count;
         const uint8_t *c = own ? state.palette.c[idx] : palette[idx];
@@ -471,27 +471,27 @@ void effectDisco2() {
 
 //
 // --------------------------------------------------
-// LIGHT ORGAN (Lichtorgel, früher "retro"): Bass rot, Mitten grün, Höhen blau
+// LIGHT ORGAN (formerly "retro"): bass red, mids green, highs blue
 void effectLightOrgan() {
-    // 1. Auf "laut" normieren (Referenzen aus dem Einmessen, sonst feste Erfahrungswerte),
-    // damit wir bei 1.0 landen
+    // 1. Normalize to "loud" (references from calibration, otherwise fixed empirical values)
+    // so we end up at 1.0
     float low   = constrain(state.kickEnergy  / max(1.0, state.refKick),  0.0, 1.0);
     float mid   = constrain(state.snareEnergy / max(1.0, state.refSnare), 0.0, 1.0);
     float high  = constrain(state.hihatEnergy / max(1.0, state.refHihat), 0.0, 1.0);
 
-    // 2. Ein "Noise Gate" einbauen: Wenn der Wert zu klein ist, bleibt es aus.
-    // Das verhindert das Flackern bei Stille (da deine Hi-Hats selbst bei "Beat:0" auf 70.000 sind)
+    // 2. Add a "noise gate": if the value is too small, the lamp stays off.
+    // This prevents flicker during silence (your hi-hats are at 70,000 even with "Beat:0")
     if (low < 0.2f)  low = 0; 
     if (mid < 0.2f)  mid = 0;
-    if (high < 0.3f) high = 0; // Hi-Hats brauchen ein höheres Gate, da sie sehr präsent sind
+    if (high < 0.3f) high = 0; // Hi-hats need a higher gate because they are very present
 
     int numFixtures = fxCount();
     for (int i = 0; i < numFixtures; i++) {
         int band = i % 3; 
 
         if (band == 0) {
-            // pow(..., 3.0f) macht den Kontrast extrem hart: 
-            // Nur die echten Spitzen (Kicks) lassen die Lampe hell aufleuchten.
+            // pow(..., 3.0f) makes the contrast extremely hard: 
+            // only the real peaks (kicks) make the lamp light up brightly.
             uint8_t r = pow(low, 3.0f) * 255;
             fxColor(i, r, 0, 0, 255); 
         } 
@@ -511,7 +511,7 @@ void effectLightOrgan() {
 
 
 // --------------------------------------------------
-// Zeitschritt seit dem letzten Aufruf (je Effekt und Slot) für weiches Abklingen
+// Time step since the last call (per effect and slot) for smooth decay
 // --------------------------------------------------
 static float frameDt(unsigned long &last) {
     unsigned long now = millis();
@@ -520,7 +520,7 @@ static float frameDt(unsigned long &last) {
     return constrain(dt, 0.0f, 0.2f);
 }
 
-// Grundfarbe für die Audio-Effekte: Kontextfarbe bzw. Palette (pro Auslöser weiter)
+// Base color for the audio effects: context color or palette (advancing per trigger)
 static void audioColor(int &palIdx, uint8_t &r, uint8_t &g, uint8_t &b) {
     r = ctx.r; g = ctx.g; b = ctx.b;
     if (state.palette.on) {
@@ -531,8 +531,8 @@ static void audioColor(int &palIdx, uint8_t &r, uint8_t &g, uint8_t &b) {
 }
 
 // --------------------------------------------------
-// PUMP: alle Lampen leuchten auf jedem Kick (bzw. Takt-Schritt) hell auf und klingen ab
-// Intensität = wie lange das Nachleuchten dauert
+// PUMP: all lamps light up brightly on every kick (or beat step) and decay
+// Intensity = how long the afterglow lasts
 // --------------------------------------------------
 void effectPump() {
     static float level[GROUP_COUNT + 1];
@@ -542,7 +542,7 @@ void effectPump() {
 
     float dt = frameDt(last[s]);
     if (colorChangeDue(2)) { level[s] = 1.0f; palIdx[s]++; }
-    float tau = 0.08f + 0.25f * fxK();          // Abklingzeit in s (~0,33 s bei 50)
+    float tau = 0.08f + 0.25f * fxK();          // decay time in s (~0.33 s at 50)
     level[s] *= expf(-dt / tau);
 
     uint8_t r, g, b;
@@ -552,8 +552,8 @@ void effectPump() {
 }
 
 // --------------------------------------------------
-// SNARE-BLITZ: Grundfarbe gedimmt, auf jeder Snare ein weißer Blitz
-// Intensität = Helligkeit der Grundfarbe zwischen den Blitzen
+// SNARE FLASH: base color dimmed, a white flash on every snare
+// Intensity = brightness of the base color between the flashes
 // --------------------------------------------------
 void effectSnareFlash() {
     static uint32_t lastSnare[GROUP_COUNT + 1];
@@ -579,8 +579,8 @@ void effectSnareFlash() {
 }
 
 // --------------------------------------------------
-// BASS-WELLE: die Bass-Lautstärke läuft als Welle von der ersten zur letzten Lampe
-// Intensität = wie schnell die Welle wandert (höher = langsamer, mehr Abstand)
+// BASS WAVE: the bass volume runs as a wave from the first to the last lamp
+// Intensity = how fast the wave travels (higher = slower, more spacing)
 // --------------------------------------------------
 void effectBassWave() {
     static float hist[128];
@@ -589,17 +589,17 @@ void effectBassWave() {
     static float smooth = 0;
     static int palIdx = 0;
 
-    // Einmal pro ~20 ms einen neuen Bass-Wert aufnehmen (gilt für alle Slots)
+    // Record a new bass value once per ~20 ms (shared by all slots)
     unsigned long now = millis();
     if (now - lastPush >= 20) {
         lastPush = now;
         float bass = constrain(state.kickEnergy / max(1.0, state.refKick), 0.0, 1.0);
-        smooth = max(bass, smooth * 0.85f);   // schnell hoch, langsam runter
+        smooth = max(bass, smooth * 0.85f);   // fast up, slow down
         head = (head + 1) % 128;
         hist[head] = smooth;
     }
 
-    int delay = constrain((int)(1 + 2 * fxK()), 1, 8);   // Bilder Verzögerung pro Lampe
+    int delay = constrain((int)(1 + 2 * fxK()), 1, 8);   // frames of delay per lamp
     for (int i = 0; i < fxCount(); i++) {
         int idx = ((head - i * delay) % 128 + 128) % 128;
         float v = hist[idx];
@@ -611,8 +611,8 @@ void effectBassWave() {
 }
 
 // --------------------------------------------------
-// EIGENES LAUFLICHT (user1 … user4): Schritte aus dem Editor, im Effekt-Takt
-// (Speed-Regler bzw. "Im Takt"); optional weich zwischen den Schritten
+// CUSTOM CHASE (user1 … user4): steps from the editor, in effect timing
+// (speed slider or "on beat"); optionally smooth between steps
 // --------------------------------------------------
 static void effectUserChase(int slot) {
     if (slot < 0 || slot >= USER_CHASES) return;
@@ -635,22 +635,22 @@ static void effectUserChase(int slot) {
 }
 
 // --------------------------------------------------
-// DROP-REAKTION (überschreibt den Effekt für DROP_HOLD_MS)
+// DROP REACTION (overrides the effect for DROP_HOLD_MS)
 // --------------------------------------------------
 void effectDropReaction(uint8_t action, unsigned long elapsed) {
     useAllFixtures();
     int n = fxCount();
 
     if (action == DROP_FLASH) {
-        // Weißer Blitz, der über die Drop-Dauer ausblendet
+        // White flash that fades out over the drop duration
         float k = 1.0f - min(1.0f, elapsed / (float)DROP_HOLD_MS);
-        uint8_t v = k * k * 255; // quadratisch → kräftiger Anfang, weiches Ende
+        uint8_t v = k * k * 255; // quadratic → strong start, soft end
         for (int i = 0; i < n; i++) fxColor(i, v, v, v, 255);
         return;
     }
 
     if (action == DROP_COLORBURST) {
-        // Schnell wechselnde, kräftige Farben – jede Lampe anders
+        // Rapidly changing, strong colors – each lamp different
         static const uint8_t palette[6][3] = {
             {255, 0, 0}, {0, 255, 0}, {0, 0, 255}, {255, 255, 0}, {255, 0, 255}, {0, 255, 255}
         };
@@ -665,17 +665,17 @@ void effectDropReaction(uint8_t action, unsigned long elapsed) {
         return;
     }
 
-    // DROP_STROBE (Standard): alle Lampen synchron weiß/aus, alle 40 ms Wechsel
+    // DROP_STROBE (default): all lamps white/off in sync, change every 40 ms
     uint8_t s = ((millis() / 40) % 2 == 0) ? 255 : 0;
     for (int i = 0; i < n; i++) fxColor(i, s, s, s, 255);
 }
 
 // --------------------------------------------------
-// MANUELLER STROBE (Knopf in der Web-UI)
+// MANUAL STROBE (button in the web UI)
 // --------------------------------------------------
 void effectManualStrobe() {
     useAllFixtures();
-    // Feste ~12 Hz, unabhängig vom Effekt-Speed (wie der Drop-Strobe)
+    // Fixed ~12 Hz, independent of the effect speed (like the drop strobe)
     uint8_t s = ((millis() / 40) % 2 == 0) ? 255 : 0;
     for (int i = 0; i < fxCount(); i++) {
         fxColor(i, s, s, s, 255);
@@ -683,7 +683,7 @@ void effectManualStrobe() {
 }
 
 // --------------------------------------------------
-// RUN EFFECT (Zentrale Steuerung)
+// RUN EFFECT (central control)
 // --------------------------------------------------
 void runEffect(const String& name) {
     useAllFixtures();
@@ -697,7 +697,7 @@ void runEffectOn(const String& name, const std::vector<int>& fixtures,
 }
 
 static void runEffectNamed(const String& name) {
-    // Ohne Fixtures nichts tun (verhindert Division durch 0 in Chase-Effekten)
+    // Do nothing without fixtures (prevents division by 0 in chase effects)
     if (fxCount() == 0) return;
 
     if (name == "static") effectStaticColor();
@@ -721,7 +721,7 @@ static void runEffectNamed(const String& name) {
     else if (name == "dimmerbounce") effectDimmerBounce();
     else if (name == "disco") effectDisco();
     else if (name == "disco2") effectDisco2();
-    else if (name == "lightorgan" || name == "retro") effectLightOrgan(); // "retro" = alter Name
+    else if (name == "lightorgan" || name == "retro") effectLightOrgan(); // "retro" = old name
     else if (name == "pump") effectPump();
     else if (name == "snareflash") effectSnareFlash();
     else if (name == "basswave") effectBassWave();

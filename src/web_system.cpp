@@ -1,4 +1,4 @@
-// System: WLAN, Backup/Wiederherstellung, Auslastung, DMX-Monitor
+// System: Wi-Fi, backup/restore, load, DMX monitor
 #include "web.h"
 #include "web_util.h"
 #include "state.h"
@@ -14,12 +14,12 @@
 #include "mqtt.h"
 
 void registerSystemRoutes() {
-    // API: WLAN-Netzwerke scannen
-    // Der Scan läuft im Hintergrund: 202 = läuft noch (UI fragt erneut), 200 = Liste
+    // API: scan Wi-Fi networks
+    // The scan runs in the background: 202 = still running (UI asks again), 200 = list
     server.on("/api/scanWifi", HTTP_GET, [](AsyncWebServerRequest *req){
         int n = WiFi.scanComplete();
         if (n == WIFI_SCAN_FAILED) {
-            // Im reinen AP-Modus kann nicht gescannt werden → AP+STA
+            // Scanning isn't possible in pure AP mode → AP+STA
             if (WiFi.getMode() == WIFI_AP) WiFi.mode(WIFI_AP_STA);
             WiFi.scanNetworks(true);
             req->send(202, "text/plain", "Scan gestartet");
@@ -30,7 +30,7 @@ void registerSystemRoutes() {
             return;
         }
 
-        // Doppelte SSIDs (mehrere Access Points) zusammenfassen, stärkstes Signal behalten
+        // Merge duplicate SSIDs (several access points), keep the strongest signal
         JsonDocument doc;
         JsonArray arr = doc.to<JsonArray>();
         for (int i = 0; i < n; i++) {
@@ -56,7 +56,7 @@ void registerSystemRoutes() {
         req->send(200, "application/json", json);
     });
 
-    // API: WLAN-Daten speichern → Neustart
+    // API: save Wi-Fi credentials → restart
     server.on("/api/saveWifi", HTTP_POST, [](AsyncWebServerRequest *req){}, NULL,
     [](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total){
         const char *body = collectBody(req, data, len, index, total);
@@ -82,7 +82,7 @@ void registerSystemRoutes() {
         scheduleRestart(1500);
     });
 
-    // API: WLAN-Daten löschen → Neustart im Access-Point-Modus
+    // API: delete Wi-Fi credentials → restart in access point mode
     server.on("/api/clearWifi", HTTP_POST, [](AsyncWebServerRequest *req){
         {
             StateLock lock;
@@ -94,7 +94,7 @@ void registerSystemRoutes() {
         scheduleRestart(1500);
     });
 
-    // API: Auslastung der Tasks (zum Prüfen der Aufteilung auf die Cores)
+    // API: task load (to check the distribution across the cores)
     server.on("/api/load", HTTP_GET, [](AsyncWebServerRequest *req){
         static uint32_t lastFrames = 0;
         static unsigned long lastMs = 0;
@@ -105,7 +105,7 @@ void registerSystemRoutes() {
         lastMs = now;
 
         JsonDocument doc;
-        // Audio: Anteil der Rechenzeit an einem Mikrofon-Frame (1024 Samples = 23,2 ms)
+        // Audio: share of compute time in one microphone frame (1024 samples = 23.2 ms)
         JsonObject a = doc["audio"].to<JsonObject>();
         a["core"] = CORE_AUDIO;
         a["us"] = loadStats.audioUs;
@@ -124,7 +124,7 @@ void registerSystemRoutes() {
         disp["core"] = CORE_AUDIO;
         disp["us"] = loadStats.displayUs;
 
-        // Freier Stack pro Task (Bytes) – zeigt, ob die Stack-Größen reichen
+        // Free stack per task (bytes) – shows whether the stack sizes are sufficient
         JsonObject st = doc["stackFree"].to<JsonObject>();
         if (loadStats.audioTask)   st["audio"]   = uxTaskGetStackHighWaterMark(loadStats.audioTask);
         if (loadStats.effectTask)  st["effect"]  = uxTaskGetStackHighWaterMark(loadStats.effectTask);
@@ -138,7 +138,7 @@ void registerSystemRoutes() {
         req->send(200, "application/json", json);
     });
 
-    // API: Aktuell gesendete DMX-Werte (binär, 1 Byte pro Kanal) für den DMX-Monitor
+    // API: currently sent DMX values (binary, 1 byte per channel) for the DMX monitor
     server.on("/api/dmx", HTTP_GET, [](AsyncWebServerRequest *req){
         static uint8_t buf[512];
         int n;
@@ -151,7 +151,7 @@ void registerSystemRoutes() {
         req->send(res);
     });
 
-    // API: Backup herunterladen (ohne WLAN-Passwort; Login wie bei /update)
+    // API: download backup (without Wi-Fi password; login as for /update)
     server.on("/api/backup", HTTP_GET, [](AsyncWebServerRequest *req){
         if (!adminAuthorized(req)) return;
         String json;
@@ -164,10 +164,10 @@ void registerSystemRoutes() {
         req->send(res);
     });
 
-    // API: Backup wiederherstellen → Neustart
+    // API: restore backup → restart
     server.on("/api/restore", HTTP_POST,
         [](AsyncWebServerRequest *req){
-            // Ohne Login wurde der Body ignoriert → Anmeldung anfordern
+            // Without login the body was ignored → request authentication
             if (!authActive() && !req->authenticate(OTA_USER, OTA_PASSWORD)) req->requestAuthentication();
         }, NULL,
         [](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total){

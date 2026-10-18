@@ -7,13 +7,13 @@
 #include "state.h"
 #include "netinput.h"
 
-#define DISPLAY_REFRESH_MS 100   // ~10 Bilder pro Sekunde
-#define BEAT_FLASH_MS      120   // So lange leuchtet der Beat-Punkt
+#define DISPLAY_REFRESH_MS 100   // ~10 frames per second
+#define BEAT_FLASH_MS      120   // How long the beat dot stays lit
 
 static Adafruit_SSD1306 oled(DISPLAY_WIDTH, DISPLAY_HEIGHT, &Wire, -1);
 static bool displayOk = false;
 
-// Prüft, ob unter der Adresse ein I2C-Gerät antwortet
+// Checks whether an I2C device answers at the address
 static bool i2cPresent(uint8_t addr) {
     Wire.beginTransmission(addr);
     return Wire.endTransmission() == 0;
@@ -23,7 +23,7 @@ void setupDisplay() {
     Wire.begin(DISPLAY_SDA_PIN, DISPLAY_SCL_PIN);
     Wire.setClock(400000);
 
-    // Die meisten Module nutzen 0x3C, manche 0x3D
+    // Most modules use 0x3C, some 0x3D
     uint8_t addr = i2cPresent(0x3C) ? 0x3C : (i2cPresent(0x3D) ? 0x3D : 0);
     if (!addr || !oled.begin(SSD1306_SWITCHCAPVCC, addr)) {
         Serial.println("Display: nicht gefunden (läuft ohne weiter)");
@@ -40,15 +40,31 @@ void setupDisplay() {
     oled.print("Controller");
     oled.setTextSize(1);
     oled.setCursor(0, 52);
-    oled.print("startet ...");
+    oled.print(state.langEn ? "starting ..." : "startet ...");
     oled.display();
     Serial.printf("Display: SSD1306 an 0x%02X\n", addr);
+}
+
+// Effect name as in the web UI: display names, custom chases, every word capitalized
+static String displayEffectName(String e) {
+    if (e == "lightorgan" || e == "retro") e = "light organ";
+    else if (e == "snareflash") e = "snare flash";
+    else if (e == "basswave") e = "bass wave";
+    else if (e.startsWith("user")) {
+        int slot = e.substring(4).toInt() - 1;
+        StateLock lock;
+        if (slot >= 0 && slot < USER_CHASES && state.userChases[slot].name.length()) e = state.userChases[slot].name;
+    }
+    for (int i = 0; i < (int)e.length(); i++) {
+        if (i == 0 || e[i - 1] == ' ') e.setCharAt(i, toupper(e[i]));
+    }
+    return e;
 }
 
 static void drawDisplay() {
     unsigned long now = millis();
 
-    // Effekt-Name kurz unter Lock kopieren (String wird vom Webserver geändert)
+    // Copy the effect name briefly under lock (the string is changed by the web server)
     String effect;
     {
         StateLock lock;
@@ -59,7 +75,7 @@ static void drawDisplay() {
     oled.clearDisplay();
     oled.setTextSize(1);
 
-    // --- Zeile 1: Netzwerk ---
+    // --- Line 1: network ---
     oled.setCursor(0, 0);
     if (WiFi.isConnected()) {
         oled.print(WiFi.localIP());
@@ -67,10 +83,10 @@ static void drawDisplay() {
         oled.print("AP ");
         oled.print(WiFi.softAPIP());
     } else {
-        oled.print("kein WLAN");
+        oled.print(state.langEn ? "no Wi-Fi" : "kein WLAN");
     }
 
-    // --- BPM groß + Beat-Punkt ---
+    // --- Large BPM + beat dot ---
     int bpm = (isnan(state.bpm) || state.bpm < 10) ? 0 : (int)roundf(state.bpm);
     oled.setTextSize(3);
     oled.setCursor(0, 13);
@@ -84,32 +100,32 @@ static void drawDisplay() {
     if (beatOn) oled.fillCircle(115, 22, 8, SSD1306_WHITE);
     else        oled.drawCircle(115, 22, 8, SSD1306_WHITE);
 
-    // --- Effekt ---
+    // --- Effect ---
     oled.setCursor(0, 39);
     if (net) {
-        oled.print("PC-Steuerung");
+        oled.print(state.langEn ? "PC control" : "PC-Steuerung");
     } else {
-        if (effect == "lightorgan") effect = "light organ";
+        effect = displayEffectName(effect);
         if (effect.length() > 21) effect = effect.substring(0, 21);
         oled.print(effect);
     }
 
-    // --- Statuszeile (invertierte Kästchen für aktive Zustände) ---
+    // --- Status line (inverted boxes for active states) ---
     struct Flag { const char *text; bool on; };
     Flag flags[] = {
-        {"FEST",  state.bpmLocked},
+        {state.langEn ? "LOCK" : "FEST", state.bpmLocked},
         {"DROP",  state.drop},
         {"PC",    net},
         {"BLACK", state.blackout},
         {"STBY",  state.standbyActive},
-        {"AUS",   state.scheduleDark && !state.scheduleOverride},   // Zeitplan
-        {"NEBEL", state.fogChannel > 0 && ((long)(state.fogUntil - now) > 0 || (long)(state.manualFogUntil - now) > 0)},
+        {state.langEn ? "OFF" : "AUS", state.scheduleDark && !state.scheduleOverride},   // schedule
+        {state.langEn ? "FOG" : "NEBEL", state.fogChannel > 0 && ((long)(state.fogUntil - now) > 0 || (long)(state.manualFogUntil - now) > 0)},
     };
     int x = 0;
     for (auto &f : flags) {
         if (!f.on) continue;
         int w = strlen(f.text) * 6 + 3;
-        if (x + w > DISPLAY_WIDTH) break;   // passt nicht mehr in die Zeile
+        if (x + w > DISPLAY_WIDTH) break;   // doesn't fit in the line anymore
         oled.fillRect(x, 48, w, 9, SSD1306_WHITE);
         oled.setTextColor(SSD1306_BLACK);
         oled.setCursor(x + 2, 49);
@@ -118,7 +134,7 @@ static void drawDisplay() {
         x += w + 3;
     }
 
-    // --- Pegelbalken ---
+    // --- Level bar ---
     float level = constrain(state.level / max(1.0, state.refLevel), 0.0, 1.0);
     oled.drawRect(0, 59, DISPLAY_WIDTH, 5, SSD1306_WHITE);
     oled.fillRect(0, 59, (int)(level * DISPLAY_WIDTH), 5, SSD1306_WHITE);
@@ -126,10 +142,10 @@ static void drawDisplay() {
     oled.display();
 }
 
-// Einbrennschutz: ohne Musik und Bedienung nach der halben Zeit dimmen, dann ausschalten.
-// Gibt false zurück, wenn das Display aus ist (dann nicht zeichnen).
+// Burn-in protection: without music and interaction dim after half the time, then turn off.
+// Returns false when the display is off (then don't draw).
 static bool updateDisplayPower() {
-    static int mode = 0;   // 0 = normal, 1 = gedimmt, 2 = aus
+    static int mode = 0;   // 0 = normal, 1 = dimmed, 2 = off
     unsigned long now = millis();
     unsigned long active = max((unsigned long)state.lastAudioKickMs, (unsigned long)state.lastUserMs);
     unsigned long idle = now - active;
@@ -160,7 +176,7 @@ static void displayTask(void *param) {
 }
 
 void startDisplayTask() {
-    if (!displayOk) return;   // kein Display → kein Task
+    if (!displayOk) return;   // no display → no task
     xTaskCreatePinnedToCore(displayTask, "displayTask", 4096, NULL, PRIO_DISPLAY,
                             &loadStats.displayTask, CORE_AUDIO);
 }

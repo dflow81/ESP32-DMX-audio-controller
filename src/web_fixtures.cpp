@@ -1,4 +1,4 @@
-// Fixtures & Moving Heads: DMX-Config, Positionen, Kanaltest, Lampe finden
+// Fixtures & moving heads: DMX config, positions, channel test, find lamp
 #include "web.h"
 #include "web_util.h"
 #include "state.h"
@@ -14,7 +14,7 @@
 #include "mqtt.h"
 
 void registerFixtureRoutes() {
-    // API: Zusatzkanal (Gobo, Farbrad, Prisma, Fokus) eines Fixtures setzen
+    // API: set an extra channel (gobo, color wheel, prism, focus) of a fixture
     server.on("/api/setExtra", HTTP_GET, [](AsyncWebServerRequest *req){
         if (!req->hasParam("id") || !req->hasParam("ch") || !req->hasParam("v")) {
             req->send(400, "text/plain", "Error");
@@ -38,7 +38,7 @@ void registerFixtureRoutes() {
         req->send(200, "text/plain", "OK");
     });
 
-    // API: Lampe finden – Fixture id blinkt 5 s weiß (id=-1 beendet)
+    // API: find lamp – fixture id flashes white for 5 s (id=-1 stops)
     server.on("/api/identify", HTTP_GET, [](AsyncWebServerRequest *req){
         int id = req->hasParam("id") ? req->getParam("id")->value().toInt() : -1;
         state.identifyIndex = id;
@@ -46,7 +46,7 @@ void registerFixtureRoutes() {
         req->send(200, "text/plain", "OK");
     });
 
-    // API: Kanaltest – ch=1..512, v=0..255 (endet 2 Min nach der letzten Änderung)
+    // API: channel test – ch=1..512, v=0..255 (ends 2 min after the last change)
     server.on("/api/testChannel", HTTP_GET, [](AsyncWebServerRequest *req){
         int ch = req->hasParam("ch") ? req->getParam("ch")->value().toInt() : 0;
         if (ch < 1 || ch > 512 || !req->hasParam("v")) { req->send(400, "text/plain", "Error"); return; }
@@ -62,7 +62,7 @@ void registerFixtureRoutes() {
         req->send(200, "text/plain", "OK");
     });
 
-    // --- Moving-Head-Positionen ---
+    // --- Moving head positions ---
     server.on("/api/positions", HTTP_GET, [](AsyncWebServerRequest *req){
         StateLock lock;
         JsonDocument doc;
@@ -78,7 +78,7 @@ void registerFixtureRoutes() {
         req->send(200, "application/json", json);
     });
 
-    // Aktuelle Pan/Tilt-Werte aller Moving Heads als Position speichern (gleicher Name = überschreiben)
+    // Save the current pan/tilt values of all moving heads as a position (same name = overwrite)
     server.on("/api/savePosition", HTTP_GET, [](AsyncWebServerRequest *req){
         String name = req->hasParam("name") ? req->getParam("name")->value() : "";
         name.trim();
@@ -111,7 +111,7 @@ void registerFixtureRoutes() {
         req->send(200, "text/plain", "OK");
     });
 
-    // Position anfahren: alle gespeicherten Heads dorthin, BPM-Auto für sie aus
+    // Recall position: move all stored heads there, BPM auto off for them
     server.on("/api/loadPosition", HTTP_GET, [](AsyncWebServerRequest *req){
         int id = req->hasParam("id") ? req->getParam("id")->value().toInt() : -1;
         StateLock lock;
@@ -136,7 +136,7 @@ void registerFixtureRoutes() {
         req->send(200, "text/plain", "OK");
     });
 
-    // API: Moving Head Liste
+    // API: moving head list
     server.on("/api/fixtures", HTTP_GET, [](AsyncWebServerRequest *req){
         JsonDocument doc;
         JsonArray array = doc.to<JsonArray>();
@@ -155,7 +155,7 @@ void registerFixtureRoutes() {
         req->send(200, "application/json", json);
     });
 
-    // API: Joystick Movement
+    // API: joystick movement
     server.on("/api/move", HTTP_GET, [](AsyncWebServerRequest *req){
         if (req->hasParam("id") && req->hasParam("p") && req->hasParam("t")) {
             int id = req->getParam("id")->value().toInt();
@@ -164,7 +164,7 @@ void registerFixtureRoutes() {
             StateLock lock;
             if(id >= 0 && id < (int)state.fixtures.size()) {
                 if (state.fixtures[id].isAutoMoving) {
-                    state.fixtures[id].isAutoMoving = false; // Joystick übernimmt
+                    state.fixtures[id].isAutoMoving = false; // joystick takes over
                     markConfigDirty();
                 }
                 setFixtureMovement(id, p, t);
@@ -175,7 +175,7 @@ void registerFixtureRoutes() {
         req->send(400, "text/plain", "Error");
     });
 
-    // API: Pan/Tilt Eckpunkte A/B speichern
+    // API: save pan/tilt corner points A/B
     server.on("/api/save", HTTP_GET, [](AsyncWebServerRequest *req){
         if (req->hasParam("id") && req->hasParam("pt")) {
             int id = req->getParam("id")->value().toInt();
@@ -203,7 +203,7 @@ void registerFixtureRoutes() {
         req->send(400, "text/plain", "Error");
     });
 
-    // API: Moving Head ausgewählt → aktuellen Zustand zurückgeben
+    // API: moving head selected → return current state
     server.on("/api/select", HTTP_GET, [](AsyncWebServerRequest *req){
         int id = req->hasParam("id") ? req->getParam("id")->value().toInt() : -1;
         StateLock lock;
@@ -219,7 +219,7 @@ void registerFixtureRoutes() {
         doc["pMin"] = fx.panMin;  doc["pMax"] = fx.panMax;
         doc["tMin"] = fx.tiltMin; doc["tMax"] = fx.tiltMax;
 
-        // Zusatzkanäle: nur die, die der Fixture-Typ hat
+        // Extra channels: only those the fixture type has
         const FixtureDefinition *def = getFixtureDef(fx.type);
         JsonObject extras = doc["extras"].to<JsonObject>();
         for (int e = 0; e < EXTRA_COUNT; e++) {
@@ -230,7 +230,7 @@ void registerFixtureRoutes() {
         req->send(200, "application/json", json);
     });
 
-    // API: Auto-Modus gezielt setzen (für den Motor-Test)
+    // API: set auto mode explicitly (for the motor test)
     server.on("/api/setAuto", HTTP_GET, [](AsyncWebServerRequest *req){
         if (req->hasParam("id") && req->hasParam("on")) {
             int id = req->getParam("id")->value().toInt();
@@ -245,7 +245,7 @@ void registerFixtureRoutes() {
         req->send(400, "text/plain", "Error");
     });
 
-    // API: Auto-Modus Toggle
+    // API: toggle auto mode
     server.on("/api/toggleAuto", HTTP_GET, [](AsyncWebServerRequest *req){
         if (req->hasParam("id")) {
             int id = req->getParam("id")->value().toInt();
@@ -260,7 +260,7 @@ void registerFixtureRoutes() {
         req->send(400, "text/plain", "Error");
     });
 
-    // API: Config abrufen
+    // API: get config
     server.on("/api/getConfig", HTTP_GET, [](AsyncWebServerRequest *req){
         StateLock lock;
         JsonDocument doc;
@@ -315,7 +315,7 @@ void registerFixtureRoutes() {
         sched["start"]  = state.scheduleStart;
         sched["end"]    = state.scheduleEnd;
         sched["preset"] = state.schedulePreset;
-        sched["time"]   = currentTimeString();   // leer = noch keine Uhrzeit
+        sched["time"]   = currentTimeString();   // empty = no time yet
         doc["displayOffMin"] = state.displayOffMin;
         doc["autoShowSmart"] = state.autoShowSmart;
         JsonObject sync = doc["syncCfg"].to<JsonObject>();
@@ -326,12 +326,12 @@ void registerFixtureRoutes() {
         mq["host"]    = state.mqttHost;
         mq["port"]    = state.mqttPort;
         mq["user"]    = state.mqttUser;
-        mq["hasPass"] = state.mqttPass.length() > 0;   // Passwort selbst nie ausliefern
+        mq["hasPass"] = state.mqttPass.length() > 0;   // never send the password itself
         mq["topic"]   = state.mqttTopic;
         JsonObject au = doc["authCfg"].to<JsonObject>();
         au["on"]      = state.authOn;
         au["user"]    = state.authUser;
-        au["hasPass"] = state.authPass.length() >= 4;   // Passwort selbst nie ausliefern
+        au["hasPass"] = state.authPass.length() >= 4;   // never send the password itself
         JsonArray chases = doc["userChases"].to<JsonArray>();
         for (int c = 0; c < USER_CHASES; c++) chases.add(state.userChases[c].name);
         doc["ip"]           = WiFi.isConnected() ? WiFi.localIP().toString() : WiFi.softAPIP().toString();
@@ -340,8 +340,8 @@ void registerFixtureRoutes() {
         req->send(200, "application/json", json);
     });
 
-    // API: Config speichern
-    // Der Body kann in mehreren Stücken ankommen → erst sammeln, dann parsen
+    // API: save config
+    // The body may arrive in several chunks → collect first, then parse
     server.on("/api/saveConfig", HTTP_POST, [](AsyncWebServerRequest *req){}, NULL,
     [](AsyncWebServerRequest *req, uint8_t *data, size_t len, size_t index, size_t total){
         const char *body = collectBody(req, data, len, index, total);
@@ -355,7 +355,7 @@ void registerFixtureRoutes() {
 
         StateLock lock;
 
-        // Alte Fixtures merken, damit MH-Grenzen & Auto-Modus erhalten bleiben
+        // Remember old fixtures so MH limits & auto mode are kept
         std::vector<Fixture> oldFixtures = state.fixtures;
 
         state.fixtures.clear();
@@ -380,10 +380,10 @@ void registerFixtureRoutes() {
         for (JsonPair kv : doc["fixtureTypes"].as<JsonObject>()) {
             state.fixtureTypes[kv.key().c_str()] = fixtureDefFromJson(kv.value().as<JsonObject>());
         }
-        memset(state.dmx, 0, sizeof(state.dmx)); // Alte Werte auf verschobenen Adressen löschen
-        updateDMXChannelCount();                 // setzt auch Gobo & Co. wieder
+        memset(state.dmx, 0, sizeof(state.dmx)); // Clear old values at shifted addresses
+        updateDMXChannelCount();                 // also re-applies gobo & co.
 
-        // Flash-Schreiben und DMX-Neustart übernimmt der Effekt-Task
+        // Flash writing and DMX restart are done by the effect task
         state.dmxReinit = true;
         configSaveNow = true;
         req->send(200, "text/plain", "OK");

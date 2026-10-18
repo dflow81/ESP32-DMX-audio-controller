@@ -15,7 +15,7 @@
 #include "mqtt.h"
 
 
-// Geplanter Neustart (z. B. nach dem Speichern der WLAN-Daten)
+// Scheduled restart (e.g. after saving the Wi-Fi credentials)
 static volatile unsigned long restartAt = 0;
 
 void scheduleRestart(unsigned long delayMs) {
@@ -23,11 +23,11 @@ void scheduleRestart(unsigned long delayMs) {
     restartAt = t ? t : 1;
 }
 
-// Auto-Show: schaltet alle showBeats Beats zum nächsten Preset.
-// Ohne erkannte Beats wird mit 120 BPM gerechnet (0,5 s pro Beat).
-// Aufruf im Effekt-Task mit gehaltenem StateLock.
-// Energie der Musik einschätzen: Lautstärke (geglättet) + Kicks pro Sekunde (letzte 8 s).
-// Ein neuer Wert gilt erst, wenn er 2 s stabil ist (kein Hin- und Herspringen).
+// Auto show: switches to the next preset every showBeats beats.
+// Without detected beats 120 BPM are assumed (0.5 s per beat).
+// Called in the effect task with the StateLock held.
+// Estimate the energy of the music: volume (smoothed) + kicks per second (last 8 s).
+// A new value only applies once it has been stable for 2 s (no flip-flopping).
 static void updateMusicEnergy() {
     static float lvl = 0;
     static unsigned long kickTimes[32] = {0};
@@ -44,7 +44,7 @@ static void updateMusicEnergy() {
     float rate = recent / 8.0f;
 
     float l = constrain(state.level / max(1.0, state.refLevel), 0.0, 2.0);
-    lvl += (l - lvl) * 0.01f;   // ~2 s Glättung bei 50 Bildern/s
+    lvl += (l - lvl) * 0.01f;   // ~2 s smoothing at 50 frames/s
 
     uint8_t e = ENERGY_MEDIUM;
     if (rate < 0.5f || lvl < 0.25f) e = ENERGY_CALM;
@@ -54,8 +54,8 @@ static void updateMusicEnergy() {
     else if (now - candidateSince > 2000) state.musicEnergy = e;
 }
 
-// Preset passend zur Energie wählen: gleiche Energie, sonst "egal", sonst irgendeins.
-// Das gerade laufende Preset nur, wenn es keine Alternative gibt.
+// Pick a preset matching the energy: same energy, else "any", else any preset.
+// The currently running preset only if there is no alternative.
 static int pickPresetForEnergy(uint8_t energy, int current) {
     std::vector<int> pool;
     for (int pass = 0; pass < 3 && pool.empty(); pass++) {
@@ -77,10 +77,10 @@ static void handleAutoShow(bool newDrop) {
     static uint8_t lastEnergy = ENERGY_CALM;
 
     unsigned long now = millis();
-    // Während Standby oder laufender Cue-Liste pausiert die Auto-Show
+    // The auto show pauses during standby or a running cue list
     bool on = state.autoShow && state.presets.size() >= 2 && !state.standbyActive && !state.cueRunning;
     if (!on || !wasOn) {
-        // (Neu-)Start: ab jetzt zählen
+        // (Re)start: count from now on
         startBeat = state.beatCount;
         startMs = now;
         wasOn = on;
@@ -93,8 +93,8 @@ static void handleAutoShow(bool newDrop) {
         : (now - startMs >= (unsigned long)state.showBeats * 500UL);
 
     if (state.autoShowSmart) {
-        // Intelligent: auch sofort wechseln, wenn sich die Energie ändert (nach min. 8 Beats)
-        // oder ein Drop kommt (dann ein "wildes" Preset)
+        // Smart: also switch immediately when the energy changes (after at least 8 beats)
+        // or a drop comes (then a "wild" preset)
         uint8_t energy = newDrop ? ENERGY_WILD : state.musicEnergy;
         bool energyChanged = energy != lastEnergy && beatsSince >= 8;
         if (!due && !energyChanged && !newDrop) return;
@@ -104,13 +104,13 @@ static void handleAutoShow(bool newDrop) {
         if (!due) return;
         index = (index + 1) % state.presets.size();
     }
-    applyPreset(index, false); // nicht speichern → schont den Flash
+    applyPreset(index, false); // don't save → spares the flash
     startBeat = state.beatCount;
     startMs = now;
 }
 
-// Cue-Liste: Presets in fester Reihenfolge, jeder Cue mit eigener Dauer
-// (Beats oder Sekunden; ohne erkannte Beats zählt ein Beat 0,5 s).
+// Cue list: presets in a fixed order, each cue with its own duration
+// (beats or seconds; without detected beats a beat counts as 0.5 s).
 static void handleCues() {
     static uint32_t startBeat = 0;
     static unsigned long startMs = 0;
@@ -153,17 +153,17 @@ static void handleCues() {
     startMs = now;
 }
 
-// Standby: Läuft standbyMin Minuten keine Musik (keine Kicks aus dem Mikrofon),
-// wechselt der Controller auf das Standby-Preset bzw. dimmt auf 20 %.
-// Kommen wieder 4 Kicks innerhalb von 4 s, wird der vorherige Zustand wiederhergestellt.
-// Bedient jemand die UI während Standby, bleibt dessen Einstellung (kein Zurückspringen).
+// Standby: if no music plays for standbyMin minutes (no kicks from the microphone),
+// the controller switches to the standby preset or dims to 20 %.
+// When 4 kicks arrive within 4 s again, the previous state is restored.
+// If someone uses the UI during standby, their setting stays (no jumping back).
 static void handleStandby() {
     static Preset before;
     static uint32_t lastKickCount = 0;
     static unsigned long kickTimes[4] = {0};
     static int kickPos = 0;
     static int kicksSinceStandby = 0;
-    static int dimmedMaster = -1;   // Master im "nur dimmen"-Standby, sonst -1
+    static int dimmedMaster = -1;   // Master in "dim only" standby, otherwise -1
 
     unsigned long now = millis();
     uint32_t kc = state.audioKickCount;
@@ -177,8 +177,8 @@ static void handleStandby() {
     if (state.userTouched) {
         state.userTouched = false;
         if (state.standbyActive) {
-            // Bedienung gewinnt, kein Wiederherstellen – nur das Dimmen zurücknehmen,
-            // falls nicht gerade der Master selbst verstellt wurde
+            // Interaction wins, no restore – only undo the dimming,
+            // unless the master itself was just changed
             if (dimmedMaster >= 0 && state.master == dimmedMaster) state.master = before.master;
             state.standbyActive = false;
         }
@@ -194,7 +194,7 @@ static void handleStandby() {
         if (p >= 0) {
             applyPreset(p, false);
         } else {
-            state.master = state.master * 20 / 100; // nur dimmen
+            state.master = state.master * 20 / 100; // dim only
             state.fadeRequest = true;
         }
         dimmedMaster = (p >= 0) ? -1 : state.master;
@@ -204,8 +204,8 @@ static void handleStandby() {
         return;
     }
 
-    // Aufwachen: 4 Kicks innerhalb von 4 s (oder Standby abgeschaltet)
-    unsigned long oldest = kickTimes[kickPos]; // ältester der letzten 4
+    // Wake up: 4 kicks within 4 s (or standby disabled)
+    unsigned long oldest = kickTimes[kickPos]; // oldest of the last 4
     bool music = kicksSinceStandby >= 4 && now - oldest < 4000;
     if (music || !enabled) {
         applyPresetData(before, false);
@@ -214,7 +214,7 @@ static void handleStandby() {
     }
 }
 
-// Nebel: automatische Stöße bei Drops und im Intervall (Ausgabe in updateDMX)
+// Fog: automatic bursts on drops and at intervals (output in updateDMX)
 static void handleFog(bool newDrop) {
     static unsigned long lastInterval = 0;
     if (state.fogChannel <= 0) return;
@@ -230,7 +230,7 @@ static void handleFog(bool newDrop) {
             state.fogUntil = now + state.fogIntervalSec * 1000UL;
         }
     } else {
-        lastInterval = now; // nach dem Einschalten erst ein volles Intervall warten
+        lastInterval = now; // after enabling, wait a full interval first
     }
 }
 
@@ -239,10 +239,10 @@ static bool isAudioEffect(const String &fx) {
            fx == "pump" || fx == "snareflash" || fx == "basswave";
 }
 
-// Ein Bild der normalen Effekt-Steuerung berechnen und senden.
-// Gibt die Wartezeit bis zum nächsten Bild zurück. Aufruf mit gehaltenem StateLock.
+// Compute and send one frame of the normal effect control.
+// Returns the wait time until the next frame. Called with the StateLock held.
 static int runEffectFrame(bool dropReaction, bool &wasStrobing) {
-    // Fixtures aufteilen: Haupteffekt (Slot 0) und Gruppen mit eigenem Effekt (Slot 1…4)
+    // Split fixtures: main effect (slot 0) and groups with their own effect (slot 1…4)
     static std::vector<int> sets[GROUP_COUNT + 1];
     for (auto &v : sets) v.clear();
     for (int i = 0; i < (int)state.fixtures.size(); i++) {
@@ -251,18 +251,18 @@ static int runEffectFrame(bool dropReaction, bool &wasStrobing) {
         sets[own ? g : 0].push_back(i);
     }
 
-    // --- EFFEKT-LOGIK ---
+    // --- EFFECT LOGIC ---
     const String &fx = state.currentEffect;
     bool hasEffect = (fx != "none" && fx != "");
     bool strobing = (long)(state.manualStrobeUntil - millis()) > 0;
     bool audioFx = hasEffect && isAudioEffect(fx);
 
     if (strobing) {
-        // Strobe-Knopf gedrückt → überschreibt den Effekt (hart, ohne Übergang)
+        // Strobe button pressed → overrides the effect (hard, no transition)
         cancelFade();
         effectManualStrobe();
     } else if (dropReaction) {
-        // Drop erkannt → eingestellte Reaktion überschreibt den Effekt
+        // Drop detected → configured reaction overrides the effect
         cancelFade();
         effectDropReaction(state.dropAction, millis() - state.dropStartMs);
     } else {
@@ -274,30 +274,30 @@ static int runEffectFrame(bool dropReaction, bool &wasStrobing) {
             audioFx |= isAudioEffect(G.effect);
         }
         if (!hasEffect && wasStrobing) {
-            // Ohne Effekt nach dem Strobe dunkel schalten statt auf Weiß stehen zu bleiben
+            // Without an effect, go dark after the strobe instead of staying white
             for (int i : sets[0]) setFixtureColor(i, 0, 0, 0, 0);
         }
     }
     wasStrobing = strobing;
 
-    // Lampe finden: gewähltes Fixture blinkt weiß (über jedem Effekt)
+    // Find lamp: selected fixture flashes white (on top of any effect)
     int idf = state.identifyIndex;
     if (idf >= 0 && idf < (int)state.fixtures.size() && (long)(state.identifyUntil - millis()) > 0) {
         uint8_t v = ((millis() / 250) % 2) ? 255 : 0;
         setFixtureColor(idf, v, v, v, v);
     }
 
-    // Immer senden: DMX-Geräte erwarten laufend Daten (und der Nebelkanal muss raus)
+    // Always send: DMX devices expect continuous data (and the fog channel must go out)
     updateDMX();
 
-    // Dynamisches Delay
-    // Während eines Übergangs mit ~50 fps senden, damit er flüssig aussieht
-    // Im Takt ebenfalls 20 ms, damit die Schritte genau auf dem Beat liegen
+    // Dynamic delay
+    // Send at ~50 fps during a transition so it looks smooth
+    // Also 20 ms when on beat so the steps land exactly on the beat
     bool fast = audioFx || isFading() || state.beatSync || dropReaction;
     return strobing ? 10 : fast ? 20 : (state.timerSpeed / 20);
 }
 
-// 2. Effekt Task (Core 1)
+// 2. Effect task (core 1)
 void effectTask(void *param) {
     uint32_t lastBeatCount = state.beatCount;
     uint32_t lastDropCount = state.dropCount;
@@ -310,21 +310,21 @@ void effectTask(void *param) {
         {
             StateLock lock;
 
-            // --- SPEICHER-CHECK ---
-            // Prüft alle paar Millisekunden, ob seit 5 Sek. nichts mehr am Webinterface 
-            // gedreht wurde und speichert dann einmalig den Flash-Speicher.
+            // --- SAVE CHECK ---
+            // Checks every few milliseconds whether nothing was changed in the web interface 
+            // for 5 s and then saves to flash once.
             if (!state.otaActive) handleAutoSave(); 
 
-            uint32_t t0 = micros(); // Rechenzeit des Bildes messen
+            uint32_t t0 = micros(); // Measure the compute time of the frame
 
             // --- BEAT ---
-            // Der Audio-Task zählt Kicks hoch; so geht kein Beat verloren
-            // und keiner wird doppelt ausgewertet
+            // The audio task counts kicks up; that way no beat is lost
+            // and none is evaluated twice
             uint32_t beats = state.beatCount;
             state.beat = (beats != lastBeatCount);
             lastBeatCount = beats;
 
-            // --- SYNC: Slave übernimmt Beat, Effekt & Co. vom Master ---
+            // --- SYNC: slave takes over beat, effect & co. from the master ---
             applySyncFromMaster();
 
             // --- DROP ---
@@ -337,17 +337,17 @@ void effectTask(void *param) {
             bool dropReaction = state.dropCount > 0 && state.dropAction != DROP_PRESET &&
                                 millis() - state.dropStartMs < DROP_HOLD_MS;
 
-            // --- STANDBY, CUE-LISTE, AUTO-SHOW, NEBEL ---
+            // --- STANDBY, CUE LIST, AUTO SHOW, FOG ---
             handleStandby();
             handleCues();
             updateMusicEnergy();
             handleAutoShow(newDrop);
             handleFog(newDrop);
 
-            // --- PC-STEUERUNG (Art-Net / sACN) ---
-            // Kommen Netzwerk-Daten, werden sie 1:1 ausgegeben; Effekte pausieren
+            // --- PC CONTROL (Art-Net / sACN) ---
+            // When network data arrives it is output 1:1; effects pause
             if (netInputActive()) {
-                // Strobe-Knopf hat auch bei PC-Steuerung Vorrang
+                // The strobe button also has priority during PC control
                 if ((long)(state.manualStrobeUntil - millis()) > 0) {
                     effectManualStrobe();
                     updateDMX();
@@ -360,7 +360,7 @@ void effectTask(void *param) {
             } else {
                 if (wasNet) {
                     wasNet = false;
-                    state.fadeRequest = true; // weich zurück zur Effekt-Steuerung
+                    state.fadeRequest = true; // smoothly back to effect control
                 }
                 delayTime = runEffectFrame(dropReaction, wasStrobing);
             }
@@ -374,12 +374,11 @@ void setup() {
     Serial.begin(115200);
     delay(500);
     
-    setupDisplay(); // zeigt "startet …", während das WLAN verbindet
     if (!LittleFS.begin(true)) Serial.println("LittleFS Error!");
 
-    initState(); // Lädt beim Start alle gespeicherten Werte
+    initState(); // Loads all saved values at startup
 
-    // Notausgang: Tap-Taster beim Einschalten gedrückt → Passwortschutz aus
+    // Escape hatch: tap button held at power-on → password protection off
     pinMode(BTN_TAP_PIN, INPUT_PULLUP);
     delay(20);
     if (digitalRead(BTN_TAP_PIN) == LOW && state.authOn) {
@@ -387,29 +386,31 @@ void setup() {
         saveConfig();
         Serial.println("Passwortschutz per Tap-Taster abgeschaltet");
     }
+
+    setupDisplay(); // shows "starting …" while Wi-Fi connects (language from the config)
     updateDMXChannelCount();
     setupDMX();
     setupWiFi(); 
     setupWeb(); 
-    setupNetInput(); // Art-Net / sACN, falls eingeschaltet
-    setupSchedule(); // Uhrzeit per NTP für den Zeitplan
-    setupButtons();  // Taster / Fußschalter
-    setupSync();     // ESP-NOW (mehrere Controller synchron)
-    setupMqtt();     // MQTT / Home Assistant (eigener Task)
+    setupNetInput(); // Art-Net / sACN, if enabled
+    setupSchedule(); // Time via NTP for the schedule
+    setupButtons();  // Buttons / footswitch
+    setupSync();     // ESP-NOW (several controllers in sync)
+    setupMqtt();     // MQTT / Home Assistant (own task)
 
-    // Core 0: Audio (+ WLAN-Stack, Display)
+    // Core 0: audio (+ Wi-Fi stack, display)
     xTaskCreatePinnedToCore(taskAudio, "AudioTask", 10240, NULL, PRIO_AUDIO, &loadStats.audioTask, CORE_AUDIO);
     startDisplayTask();
 
-    // Core 1: Effekte (+ DMX-Senden, Webserver, loop). Beinhaltet auch das AutoSave.
+    // Core 1: effects (+ DMX output, web server, loop). Also includes the auto-save.
     xTaskCreatePinnedToCore(effectTask, "effectTask", 6144, NULL, PRIO_EFFECT, &loadStats.effectTask, CORE_LIGHT);
 
     Serial.println("System ready.");
 }
 
 void loop() {
-    // Effekte und Audio laufen in eigenen FreeRTOS-Tasks;
-    // die Loop (Core 1) kümmert sich um WLAN, OTA-Updates, Taster, Zeitplan, WebSocket und geplante Neustarts
+    // Effects and audio run in their own FreeRTOS tasks;
+    // the loop (core 1) handles Wi-Fi, OTA updates, buttons, schedule, WebSocket and scheduled restarts
     handleWiFi();
     handleOTA();
     handleButtons();
@@ -418,7 +419,7 @@ void loop() {
     handleLiveStatus();
 
     if (restartAt && (long)(millis() - restartAt) >= 0) {
-        StateLock lock; // wartet, bis ein laufender Speichervorgang fertig ist
+        StateLock lock; // waits until a running save has finished
         Serial.println("Neustart …");
         delay(100);
         ESP.restart();

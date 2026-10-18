@@ -5,7 +5,7 @@
 #include <vector>
 
 // --------------------------------------------------
-// Effekt-Funktionen
+// Effect functions
 // --------------------------------------------------
 
 void effectStaticColor();
@@ -28,31 +28,31 @@ void effectDimmerWave();
 void effectDimmerChase();
 void effectDimmerBounce();
 
-// Neue Audio-Effekte
+// New audio effects
 void effectDisco();
 void effectDisco2();
-void effectLightOrgan();   // Lichtorgel (früher "retro")
-void effectPump();         // Kick → alle hell, klingt ab
-void effectSnareFlash();   // Snare → weißer Blitz
-void effectBassWave();     // Bass läuft als Welle über die Lampen
+void effectLightOrgan();   // Light organ (formerly "retro")
+void effectPump();         // Kick → everything bright, then decays
+void effectSnareFlash();   // Snare → white flash
+void effectBassWave();     // Bass runs as a wave across the lamps
 
-// Aktueller Effekt-Schritt (Takt-Raster), z. B. für die Moving Heads
+// Current effect step (beat grid), e.g. for the moving heads
 long effectStepIndex();
 
-// Manueller Strobe (Knopf in der Web-UI), überschreibt den laufenden Effekt
+// Manual strobe (button in the web UI), overrides the running effect
 void effectManualStrobe();
 
-// Drop-Reaktion (DropAction aus state.h), elapsed = ms seit dem Drop
+// Drop reaction (DropAction from state.h), elapsed = ms since the drop
 void effectDropReaction(uint8_t action, unsigned long elapsed);
 
-// Hilfsfunktion für Timer-Speed
+// Helper for timer speed
 float getT();
 
-// Zentrale Effektsteuerung: Effekt auf alle Fixtures mit der Grundfarbe
+// Central effect control: effect on all fixtures with the base color
 void runEffect(const String& name);
 
-// Effekt auf eine Auswahl von Fixtures (Gruppe) mit eigener Grundfarbe.
-// slot: 0 = Haupteffekt, 1…GROUP_COUNT = Gruppe
+// Effect on a selection of fixtures (group) with its own base color.
+// slot: 0 = main effect, 1…GROUP_COUNT = group
 void runEffectOn(const String& name, const std::vector<int>& fixtures,
                  uint8_t r, uint8_t g, uint8_t b, int slot);
 

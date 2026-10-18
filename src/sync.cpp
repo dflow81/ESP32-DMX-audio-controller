@@ -19,7 +19,7 @@ struct __attribute__((packed)) SyncPacket {
     uint8_t  group;
     uint32_t beatCount;
     float    bpm;
-    uint16_t beatAgeMs;          // so lange ist der letzte Beat beim Senden her
+    uint16_t beatAgeMs;          // how long ago the last beat was when sending
     uint32_t dropCount;
     char     effect[16];
     uint8_t  r, g, b;
@@ -35,7 +35,7 @@ static const uint8_t BROADCAST[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 static bool espNowReady = false;
 static wifi_interface_t peerIf = WIFI_IF_STA;
 
-// Empfang (läuft im WLAN-Task) → Puffer; übernommen wird im Effekt-Task
+// Receive (runs in the Wi-Fi task) → buffer; applied in the effect task
 static portMUX_TYPE rxMux = portMUX_INITIALIZER_UNLOCKED;
 static SyncPacket rxPacket;
 static volatile unsigned long rxMs = 0;
@@ -51,22 +51,22 @@ static void onReceive(const uint8_t *mac, const uint8_t *data, int len) {
     rxMs = now ? now : 1;
 }
 
-// Broadcast-Peer auf der gerade aktiven Schnittstelle (WLAN-Client oder Hotspot)
+// Broadcast peer on the currently active interface (Wi-Fi client or hotspot)
 static void ensurePeer() {
     wifi_interface_t want = (WiFi.getMode() & WIFI_MODE_STA) ? WIFI_IF_STA : WIFI_IF_AP;
     if (esp_now_is_peer_exist(BROADCAST) && want == peerIf) return;
     if (esp_now_is_peer_exist(BROADCAST)) esp_now_del_peer(BROADCAST);
     esp_now_peer_info_t peer = {};
     memcpy(peer.peer_addr, BROADCAST, 6);
-    peer.channel = 0;            // aktueller Kanal
+    peer.channel = 0;            // current channel
     peer.ifidx = want;
     peer.encrypt = false;
     if (esp_now_add_peer(&peer) == ESP_OK) peerIf = want;
 }
 
 void setupSync() {
-    // Kein WLAN-Stromsparmodus: sonst verpasst der Funk zwischendurch Sync-Pakete
-    // (und die Web-UI reagiert träger)
+    // No Wi-Fi power saving: otherwise the radio misses sync packets in between
+    // (and the web UI reacts more sluggishly)
     WiFi.setSleep(false);
     if (esp_now_init() != ESP_OK) {
         Serial.println("Sync: ESP-NOW konnte nicht gestartet werden");
@@ -80,14 +80,14 @@ void setupSync() {
 void handleSync() {
     if (!espNowReady) return;
 
-    // Slave: Verbindung zum Master noch frisch?
+    // Slave: is the connection to the master still fresh?
     unsigned long now = millis();
     unsigned long last = rxMs;
     state.syncReceiving = state.syncRole == SYNC_SLAVE && last && now - last < SYNC_TIMEOUT_MS;
 
     if (state.syncRole != SYNC_MASTER) return;
 
-    // Master: sofort bei Beat/Drop/Blackout, sonst alle 50 ms
+    // Master: immediately on beat/drop/blackout, otherwise every 50 ms
     static unsigned long lastSend = 0;
     static uint32_t lastBeat = 0, lastDrop = 0;
     static bool lastBlackout = false;
@@ -134,13 +134,13 @@ void applySyncFromMaster() {
     portEXIT_CRITICAL(&rxMux);
     unsigned long now = millis();
 
-    if (first) {   // beim (Wieder-)Verbinden keine alten Beats/Drops nachholen
+    if (first) {   // don't replay old beats/drops when (re)connecting
         lastMasterBeat = p.beatCount;
         lastMasterDrop = p.dropCount;
         first = false;
     }
 
-    // Beat und Tempo
+    // Beat and tempo
     if (p.beatCount != lastMasterBeat) {
         lastMasterBeat = p.beatCount;
         state.lastBeatMs = now - p.beatAgeMs;
@@ -148,7 +148,7 @@ void applySyncFromMaster() {
     }
     if (p.bpm > 0) state.bpm = p.bpm;
 
-    // Drop (nur wenn hier die Drop-Erkennung an ist)
+    // Drop (only if drop detection is enabled here)
     if (p.dropCount != lastMasterDrop) {
         lastMasterDrop = p.dropCount;
         if (state.dropEnabled) {
@@ -158,7 +158,7 @@ void applySyncFromMaster() {
         }
     }
 
-    // Effekt, Farben, Einstellungen
+    // Effect, colors, settings
     p.effect[sizeof(p.effect) - 1] = 0;
     String eff(p.effect);
     bool changed = eff != state.currentEffect || p.r != state.colorR || p.g != state.colorG || p.b != state.colorB;

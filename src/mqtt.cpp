@@ -5,15 +5,15 @@
 #include "mqtt.h"
 #include "state.h"
 
-#define MQTT_RETRY_MS      10000   // Verbindungsversuch höchstens alle 10 s
-#define MQTT_REFRESH_MS    30000   // Zustand spätestens alle 30 s neu senden
+#define MQTT_RETRY_MS      10000   // Connection attempt at most every 10 s
+#define MQTT_REFRESH_MS    30000   // Resend the state at least every 30 s
 
 static WiFiClient net;
 static PubSubClient mqtt(net);
 static volatile bool reconfigure = false;
-static String deviceId;            // z. B. "dmx_a1b2c3"
+static String deviceId;            // e.g. "dmx_a1b2c3"
 
-// Effekte für Home Assistant (wie in der Web-UI)
+// Effects for Home Assistant (as in the web UI)
 static const char *const EFFECTS[] = {
     "static", "fade", "rainbow", "chase", "bounce", "dualwave", "pulse", "sparkle", "strobe",
     "fire", "candle", "aurora", "ocean", "sunset", "fullstrobe", "randomstrobe",
@@ -25,7 +25,7 @@ static String topic(const char *suffix) { return state.mqttTopic + "/" + suffix;
 
 void mqttReconfigure() { reconfigure = true; }
 
-// --- Home Assistant Discovery ---
+// --- Home Assistant discovery ---
 static void addDevice(JsonDocument &doc) {
     JsonObject dev = doc["device"].to<JsonObject>();
     dev["identifiers"][0] = deviceId;
@@ -33,12 +33,12 @@ static void addDevice(JsonDocument &doc) {
     dev["manufacturer"] = "ESP32 DMX Audio Controller";
 }
 
-static String presetNames;   // zuletzt gemeldete Preset-Liste (bei Änderung neu melden)
+static String presetNames;   // last announced preset list (re-announce on change)
 
 static void publishDiscovery() {
     String json;
 
-    // Licht
+    // Light
     {
         JsonDocument doc;
         doc["name"] = "Licht";
@@ -62,7 +62,7 @@ static void publishDiscovery() {
         mqtt.publish(("homeassistant/light/" + deviceId + "/config").c_str(), json.c_str(), true);
     }
 
-    // Preset-Auswahl
+    // Preset selector
     {
         JsonDocument doc;
         doc["name"] = "Preset";
@@ -83,7 +83,7 @@ static void publishDiscovery() {
         mqtt.publish(("homeassistant/select/" + deviceId + "_preset/config").c_str(), json.c_str(), true);
     }
 
-    // BPM-Sensor
+    // BPM sensor
     {
         JsonDocument doc;
         doc["name"] = "BPM";
@@ -98,7 +98,7 @@ static void publishDiscovery() {
     }
 }
 
-// --- Zustand senden ---
+// --- Publish state ---
 static String lastLight, lastPreset;
 static int lastBpm = -1;
 
@@ -125,7 +125,7 @@ static void publishState(bool force) {
     if (force || bpm != lastBpm) { mqtt.publish(topic("bpm").c_str(), String(bpm).c_str(), true); lastBpm = bpm; }
 }
 
-// --- Befehle aus Home Assistant ---
+// --- Commands from Home Assistant ---
 static void onMessage(char *t, byte *payload, unsigned int len) {
     String tp(t);
     String msg;
@@ -142,7 +142,7 @@ static void onMessage(char *t, byte *payload, unsigned int len) {
             state.colorR = doc["color"]["r"] | state.colorR;
             state.colorG = doc["color"]["g"] | state.colorG;
             state.colorB = doc["color"]["b"] | state.colorB;
-            state.currentEffect = "static";   // wie in der Web-UI: Farbe → statisch
+            state.currentEffect = "static";   // as in the web UI: color → static
             state.activePreset = -1;
             state.fadeRequest = true;
         }
@@ -203,7 +203,7 @@ static void mqttTask(void *param) {
 
         mqtt.loop();
 
-        // Preset-Liste geändert → Home Assistant neu informieren
+        // Preset list changed → inform Home Assistant again
         String names;
         {
             StateLock lock;
@@ -225,7 +225,7 @@ void setupMqtt() {
     snprintf(id, sizeof(id), "dmx_%02x%02x%02x", mac[3], mac[4], mac[5]);
     deviceId = id;
 
-    mqtt.setBufferSize(2048);   // Discovery mit Effekt-Liste ist größer als der Standard
+    mqtt.setBufferSize(2048);   // Discovery with the effect list is larger than the default
     mqtt.setCallback(onMessage);
     mqtt.setSocketTimeout(2);
     xTaskCreatePinnedToCore(mqttTask, "mqttTask", 8192, NULL, 1, NULL, CORE_AUDIO);

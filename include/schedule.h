@@ -1,17 +1,17 @@
 #pragma once
 #include <Arduino.h>
 
-// Zeitplan: Licht nur zwischen state.scheduleStart und state.scheduleEnd.
-// Die Uhrzeit kommt per NTP aus dem Internet (deutsche Zeit inkl. Sommerzeit).
-// Ohne gültige Uhrzeit bleibt das Licht an.
+// Schedule: lights only between state.scheduleStart and state.scheduleEnd.
+// The time comes via NTP from the internet (German time incl. daylight saving).
+// Without a valid time the lights stay on.
 #define SCHEDULE_TZ  "CET-1CEST,M3.5.0,M10.5.0/3"
 #define NTP_SERVER_1 "pool.ntp.org"
 #define NTP_SERVER_2 "time.nist.gov"
 
 void setupSchedule();
 
-// In loop() aufrufen (prüft einmal pro Sekunde)
+// Call in loop() (checks once per second)
 void handleSchedule();
 
-// Aktuelle Uhrzeit als "HH:MM" (leer, wenn noch keine Zeit)
+// Current time as "HH:MM" (empty if no time yet)
 String currentTimeString();

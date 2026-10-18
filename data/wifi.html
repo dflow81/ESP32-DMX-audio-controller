@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="/style.css">
+    <script src="/i18n.js"></script>
     <title>WLAN Konfiguration</title>
 </head>
 <body>
@@ -22,18 +23,18 @@
 
 <div class="container">
     
-    <!-- SCAN BEREICH -->
+    <!-- SCAN AREA -->
     <div class="card">
         <h2>WLAN Netzwerke</h2>
         <p style="color: #888; font-size: 0.9em;">Scanne nach verfügbaren Netzwerken in der Umgebung.</p>
         <button onclick="scan()" id="scanBtn">Netzwerke scannen</button>
         
         <div id="list" style="margin-top: 15px; max-height: 300px; overflow-y: auto;">
-            <!-- Netzwerke erscheinen hier -->
+            <!-- networks appear here -->
         </div>
     </div>
 
-    <!-- EINGABE BEREICH -->
+    <!-- INPUT AREA -->
     <div class="card">
         <h2>Verbindung herstellen</h2>
         
@@ -50,7 +51,7 @@
         <button class="btn-save" style="width: 100%; margin-top: 20px;" onclick="save()">Einstellungen speichern</button>
     </div>
 
-    <!-- RESET BEREICH -->
+    <!-- RESET AREA -->
     <div class="card">
         <h2>Zugang (Passwort)</h2>
         <label class="net-row"><input type="checkbox" id="authOn"> Bedienung nur mit Passwort</label>
@@ -173,7 +174,7 @@ function saveMqtt() {
     let q = `mqttOn=${document.getElementById("mqttOn").checked ? 1 : 0}&mqttHost=${v("mqttHost")}` +
             `&mqttPort=${v("mqttPort")}&mqttUser=${v("mqttUser")}&mqttTopic=${v("mqttTopic")}`;
     const pass = document.getElementById("mqttPass").value;
-    if (pass) q += "&mqttPass=" + encodeURIComponent(pass);   // leer = Passwort nicht ändern
+    if (pass) q += "&mqttPass=" + encodeURIComponent(pass);   // empty = don't change the password
     fetch("/api/settings?" + q).then(r => {
         document.getElementById("mqttPass").value = "";
         alert(r.ok ? "MQTT gespeichert – der Controller verbindet sich neu." : "Fehler beim Speichern.");
@@ -192,7 +193,7 @@ loadNet();
 setInterval(pollMqtt, 3000);
 
 /**
- * Scannt nach Netzwerken
+ * Scans for networks
  */
 function scan() {
     const btn = document.getElementById("scanBtn");
@@ -202,7 +203,7 @@ function scan() {
     btn.disabled = true;
     listDiv.innerHTML = "<p style='color:#888'>Scan wird durchgeführt...</p>";
 
-    // Der ESP scannt im Hintergrund: 202 = läuft noch → nach 1 s erneut fragen
+    // The ESP scans in the background: 202 = still running → ask again after 1 s
     let tries = 0;
     const done = () => {
         btn.innerText = "Netzwerke scannen";
@@ -220,7 +221,7 @@ function scan() {
                 return r.json();
             })
             .then(list => {
-                if (list === null) return; // Scan läuft noch
+                if (list === null) return; // scan still running
                 showNetworks(list || []);
                 done();
             })
@@ -233,7 +234,7 @@ function scan() {
 }
 
 /**
- * Netzwerkliste anzeigen (SSIDs als Text einfügen, nicht als HTML)
+ * Show the network list (insert SSIDs as text, not as HTML)
  */
 function showNetworks(list) {
     const listDiv = document.getElementById("list");
@@ -262,7 +263,7 @@ function showNetworks(list) {
 }
 
 /**
- * SSID auswählen
+ * Select SSID
  */
 function selectSSID(s) {
     document.getElementById("ssid").value = s;
@@ -270,7 +271,7 @@ function selectSSID(s) {
 }
 
 /**
- * WLAN Daten speichern
+ * Save Wi-Fi credentials
  */
 function save() {
     const ssid = document.getElementById("ssid").value;
@@ -292,7 +293,7 @@ function save() {
 }
 
 /**
- * WLAN Daten löschen & Reset
+ * Delete Wi-Fi credentials & reset
  */
 function clearWifi() {
     if(!confirm("WLAN-Daten wirklich löschen? Der Controller ist danach nur noch über seinen eigenen Hotspot erreichbar.")) return;

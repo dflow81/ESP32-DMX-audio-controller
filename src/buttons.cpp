@@ -3,14 +3,14 @@
 #include "state.h"
 
 #define DEBOUNCE_MS    30
-#define HOLD_REFRESH_MS 150   // Strobe/Nebel laufen weiter, solange gedrückt
+#define HOLD_REFRESH_MS 150   // strobe/fog keep running while held
 
 enum ButtonAction { ACT_STROBE, ACT_BLACKOUT, ACT_FOG, ACT_TAP, ACT_NEXT };
 
 struct Button {
     int8_t pin;
     ButtonAction action;
-    bool pressed;            // entprellter Zustand
+    bool pressed;            // debounced state
     bool lastRaw;
     unsigned long changedMs;
 };
@@ -30,7 +30,7 @@ void setupButtons() {
     }
 }
 
-// Einmal beim Drücken
+// Once on press
 static void onPress(ButtonAction a) {
     state.lastUserMs = millis();
     switch (a) {
@@ -57,7 +57,7 @@ void handleButtons() {
     unsigned long now = millis();
     for (auto &b : buttons) {
         if (b.pin < 0) continue;
-        bool raw = digitalRead(b.pin) == LOW;   // gedrückt = nach GND
+        bool raw = digitalRead(b.pin) == LOW;   // pressed = pulled to GND
         if (raw != b.lastRaw) {
             b.lastRaw = raw;
             b.changedMs = now;
@@ -67,7 +67,7 @@ void handleButtons() {
             if (b.pressed) onPress(b.action);
         }
 
-        // Halten-Funktionen laufend auffrischen (enden kurz nach dem Loslassen)
+        // Keep refreshing the hold functions (they end shortly after release)
         if (b.pressed) {
             if (b.action == ACT_STROBE) state.manualStrobeUntil = now + HOLD_REFRESH_MS;
             if (b.action == ACT_FOG)    state.manualFogUntil = now + HOLD_REFRESH_MS;

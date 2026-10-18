@@ -3,14 +3,14 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 
-// Die Config liegt als JSON im NVS-Speicher (nicht im Dateisystem).
-// So kann ein Dateisystem-Upload (Web-Oberfläche) die Einstellungen nie überschreiben.
+// The config is stored as JSON in NVS (not in the file system).
+// That way a file system upload (web interface) can never overwrite the settings.
 #define NVS_NAMESPACE   "dmx"
 #define NVS_CONFIG_KEY  "config"
 #define NVS_PRESETS_KEY "presets"
 #define NVS_CUES_KEY    "cues"
 #define NVS_CHASES_KEY  "chases"
-#define LEGACY_CONFIG   "/config.json"   // alter Speicherort, wird einmalig übernommen
+#define LEGACY_CONFIG   "/config.json"   // old location, migrated once
 
 ControllerState state;
 LoadStats loadStats;
@@ -20,12 +20,12 @@ const char* const EXTRA_NAMES[EXTRA_COUNT]       = {"gobo", "colorWheel", "prism
 const char* const EXTRA_OFFSET_KEYS[EXTRA_COUNT] = {"offsetGobo", "offsetColorWheel", "offsetPrism", "offsetFocus"};
 
 // ----------------------------------------------------
-// Default Fixture-Typen laden
+// Load default fixture types
 // ----------------------------------------------------
 void loadDefaultFixtureTypes() {
     state.fixtureTypes.clear();
 
-    //                            Ch  Dim  R  G  B   W  Pan Tilt  Gobo Farbrad Prisma Fokus
+    //                            Ch  Dim  R  G  B   W  Pan Tilt  Gobo Wheel Prism Focus
     state.fixtureTypes["RGB3"]  = {3,  -1, 0, 1, 2, -1, -1, -1, {-1, -1, -1, -1}};
     state.fixtureTypes["RGBW4"] = {4,  -1, 0, 1, 2,  3, -1, -1, {-1, -1, -1, -1}};
     state.fixtureTypes["PAR7"]  = {7,   0, 1, 2, 3,  4, -1, -1, {-1, -1, -1, -1}};
@@ -34,7 +34,7 @@ void loadDefaultFixtureTypes() {
 }
 
 // ----------------------------------------------------
-// FixtureDefinition <-> JSON (für Config, /api/getConfig und /api/saveConfig)
+// FixtureDefinition <-> JSON (for config, /api/getConfig and /api/saveConfig)
 // ----------------------------------------------------
 void fixtureDefToJson(JsonObject t, const FixtureDefinition &d) {
     t["channels"]     = d.channels;
@@ -63,7 +63,7 @@ FixtureDefinition fixtureDefFromJson(JsonObject t) {
 }
 
 // ----------------------------------------------------
-// Zusatzkanäle (Gobo, Farbrad, Prisma, Fokus) in den DMX-Puffer schreiben
+// Write extra channels (gobo, color wheel, prism, focus) into the DMX buffer
 // ----------------------------------------------------
 void applyFixtureExtras() {
     for (auto &fx : state.fixtures) {
@@ -88,7 +88,7 @@ int findPreset(const String &name) {
 }
 
 void applyPresetData(const Preset &p, bool persist) {
-    if (p.fadeMs >= 0) state.nextFadeMs = p.fadeMs;   // Übergangszeit dieses Presets
+    if (p.fadeMs >= 0) state.nextFadeMs = p.fadeMs;   // Transition time of this preset
     state.fxWidth = p.fxWidth;
     state.fxIntensity = p.fxIntensity;
     state.currentEffect = p.effect;
@@ -96,9 +96,9 @@ void applyPresetData(const Preset &p, bool persist) {
     state.timerSpeed = p.timerSpeed;
     state.master = p.master;
     if (p.hasGroups) {
-        // Gruppen ohne eigenen Effekt bzw. eine ausgeschaltete Palette nur abschalten –
-        // die eingestellten Farben/Effekte bleiben für später erhalten.
-        // Gruppennamen gehören zur Anlage, nicht zum Preset.
+        // Groups without their own effect or a disabled palette are only switched off –
+        // the configured colors/effects are kept for later.
+        // Group names belong to the installation, not to the preset.
         for (int g = 0; g < GROUP_COUNT; g++) {
             if (p.groups[g].custom) {
                 state.groups[g].custom = true;
@@ -124,8 +124,8 @@ void applyPreset(int index, bool persist) {
     applyPresetData(state.presets[index], persist);
 }
 
-// Tap-Tempo: bis zu 8 Taps mitteln; >2 s Pause beginnt eine neue Folge.
-// Ab dem 2. Tap wird das Tempo übernommen und festgehalten, der Takt auf den Tap ausgerichtet.
+// Tap tempo: average up to 8 taps; a pause >2 s starts a new sequence.
+// From the 2nd tap the tempo is applied and locked, the beat aligned to the tap.
 int registerTap() {
     static unsigned long taps[8];
     static int tapCount = 0;
@@ -182,7 +182,7 @@ void hexToColor(const String &hexIn, uint8_t &r, uint8_t &g, uint8_t &b) {
 }
 
 // ----------------------------------------------------
-// Gruppen / Palette <-> JSON
+// Groups / palette <-> JSON
 // ----------------------------------------------------
 static void groupsToJson(JsonArray arr, const GroupSettings *groups, bool withName) {
     for (int g = 0; g < GROUP_COUNT; g++) {
@@ -225,12 +225,12 @@ static void paletteFromJson(JsonObject o, Palette &p) {
     }
 }
 
-// Für die Web-API (gleiche Darstellung wie in der Config)
+// For the web API (same representation as in the config)
 void groupsToJsonPublic(JsonArray arr)      { groupsToJson(arr, state.groups, true); }
 void paletteToJsonPublic(JsonObject o)      { paletteToJson(o, state.palette); }
 
 // ----------------------------------------------------
-// FixtureDefinition holen
+// Get FixtureDefinition
 // ----------------------------------------------------
 const FixtureDefinition* getFixtureDef(const String &name) {
     auto it = state.fixtureTypes.find(name);
@@ -239,7 +239,7 @@ const FixtureDefinition* getFixtureDef(const String &name) {
 }
 
 // ----------------------------------------------------
-// Startadresse eines Fixtures (1-basiert)
+// Start address of a fixture (1-based)
 // ----------------------------------------------------
 int getFixtureStartAddress(int fixtureIndex) {
     if (fixtureIndex < 0 || fixtureIndex >= (int)state.fixtures.size())
@@ -248,7 +248,7 @@ int getFixtureStartAddress(int fixtureIndex) {
 }
 
 // ----------------------------------------------------
-// DMX Kanalanzahl + Dimm-Maske berechnen
+// Compute DMX channel count + dimmer mask
 // ----------------------------------------------------
 static void markDimmable(int base, int offset) {
     if (offset < 0) return;
@@ -266,8 +266,8 @@ void updateDMXChannelCount() {
         int end = fx.start + def->channels - 1;
         if (end > maxChannel) maxChannel = end;
 
-        // Master nur einmal anwenden: auf den Dimmer-Kanal, falls vorhanden,
-        // sonst auf die Farbkanäle (sonst wirkt der Master quadratisch)
+        // Apply the master only once: to the dimmer channel if present,
+        // otherwise to the color channels (else the master would act quadratically)
         int base = fx.start - 1;
         if (def->offsetDimmer >= 0) {
             markDimmable(base, def->offsetDimmer);
@@ -281,11 +281,11 @@ void updateDMXChannelCount() {
     state.numChannels = maxChannel;
     if (state.numChannels > 512) state.numChannels = 512;
 
-    applyFixtureExtras(); // Gobo & Co. nach jeder Änderung der Fixtures neu setzen
+    applyFixtureExtras(); // Re-apply gobo & co. after every fixture change
 }
 
 // ----------------------------------------------------
-// Config speichern (JSON im NVS)
+// Save config (JSON in NVS)
 // ----------------------------------------------------
 static void buildConfigDoc(JsonDocument &doc, bool includeWifi);
 static bool writeConfigToNVS(JsonDocument &doc);
@@ -296,9 +296,9 @@ void saveConfig() {
     writeConfigToNVS(doc);
 }
 
-// Der NVS-Bereich ist nur 20 KB groß, und beim Überschreiben müssen alter und neuer
-// Stand kurz gleichzeitig hineinpassen. Deshalb wird die Config in drei Einträge
-// aufgeteilt: Grund-Config, Presets und Cue-Liste.
+// The NVS area is only 20 KB, and when overwriting, the old and new
+// data briefly have to fit at the same time. That's why the config is split into
+// three entries: base config, presets and cue list.
 static bool putJson(Preferences &prefs, const char *key, JsonVariantConst v) {
     String json;
     serializeJson(v, json);
@@ -335,11 +335,11 @@ static bool writeConfigToNVS(JsonDocument &doc) {
 }
 
 // ----------------------------------------------------
-// Backup / Wiederherstellung
+// Backup / restore
 // ----------------------------------------------------
 String exportConfigJson() {
     JsonDocument doc;
-    buildConfigDoc(doc, false); // WLAN-Passwort gehört nicht in eine Datei, die herumliegt
+    buildConfigDoc(doc, false); // The Wi-Fi password does not belong in a file lying around
     String json;
     serializeJsonPretty(doc, json);
     return json;
@@ -356,23 +356,23 @@ bool importConfigJson(const char *json, size_t len, String &error) {
         return false;
     }
 
-    // WLAN-Daten des Geräts behalten (sind im Backup nicht enthalten)
+    // Keep the device's Wi-Fi credentials (not contained in the backup)
     doc["wifi_ssid"] = state.wifi_ssid;
     doc["wifi_pass"] = state.wifi_pass;
     doc["mqtt"]["pass"] = state.mqttPass;
-    doc["auth"]["pass"] = state.authPass;   // Passwort des Geräts behalten
+    doc["auth"]["pass"] = state.authPass;   // Keep the device's password
 
     if (!writeConfigToNVS(doc)) {
         error = "Speichern fehlgeschlagen";
         return false;
     }
-    state.otaActive = true; // Auto-Save sperren, sonst überschreibt der alte Stand das Backup
+    state.otaActive = true; // Block auto-save, otherwise the old state would overwrite the backup
     Serial.println("Backup wiederhergestellt, Neustart folgt");
     return true;
 }
 
 static void buildConfigDoc(JsonDocument &doc, bool includeWifi) {
-    // Fixtures speichern inkl. MH-Grenzen
+    // Save fixtures incl. MH limits
     JsonArray arr = doc["fixtures"].to<JsonArray>();
     for (auto &fx : state.fixtures) {
         JsonObject o = arr.add<JsonObject>();
@@ -389,7 +389,7 @@ static void buildConfigDoc(JsonDocument &doc, bool includeWifi) {
         for (int e = 0; e < EXTRA_COUNT; e++) ex.add(fx.extra[e]);
     }
 
-    // Fixture-Typen speichern
+    // Save fixture types
     JsonObject types = doc["fixtureTypes"].to<JsonObject>();
     for (auto &kv : state.fixtureTypes) {
         fixtureDefToJson(types[kv.first].to<JsonObject>(), kv.second);
@@ -401,13 +401,13 @@ static void buildConfigDoc(JsonDocument &doc, bool includeWifi) {
         doc["wifi_pass"] = state.wifi_pass;
     }
     
-    // NEU: Audio Threshold speichern
+    // Save audio threshold
     doc["audioThreshold"] = state.audioThreshold;
     doc["dropEnabled"]    = state.dropEnabled;
     doc["dropAction"]     = state.dropAction;
     doc["dropPreset"]     = state.dropPreset;
 
-    // Takt, Moving Heads, Auto-Show
+    // Beat, moving heads, auto show
     doc["beatSync"]     = state.beatSync;
     doc["stepsPerBeat"] = state.stepsPerBeat;
     doc["movePattern"]  = state.movePattern;
@@ -431,7 +431,7 @@ static void buildConfigDoc(JsonDocument &doc, bool includeWifi) {
         o["i"] = p.fxIntensity;
         if (p.energy) o["e"] = p.energy;
         if (p.hasGroups) {
-            // Kompakt: Gruppen/Palette nur speichern, wenn sie benutzt werden (NVS ist klein)
+            // Compact: only store groups/palette when they are used (NVS is small)
             o["v2"] = true;
             bool anyCustom = false;
             for (int g = 0; g < GROUP_COUNT; g++) anyCustom |= p.groups[g].custom;
@@ -440,11 +440,11 @@ static void buildConfigDoc(JsonDocument &doc, bool includeWifi) {
         }
     }
 
-    // Gruppen, Palette
+    // Groups, palette
     groupsToJson(doc["groups"].to<JsonArray>(), state.groups, true);
     paletteToJson(doc["palette"].to<JsonObject>(), state.palette);
 
-    // Nebel
+    // Fog
     JsonObject fog = doc["fog"].to<JsonObject>();
     fog["channel"]     = state.fogChannel;
     fog["level"]       = state.fogLevel;
@@ -453,14 +453,14 @@ static void buildConfigDoc(JsonDocument &doc, bool includeWifi) {
     fog["intervalMin"] = state.fogIntervalMin;
     fog["intervalSec"] = state.fogIntervalSec;
 
-    // Übergänge, Effekt-Parameter, Lautstärke-Helligkeit
+    // Transitions, effect parameters, volume-driven brightness
     doc["fadeMs"]        = state.fadeMs;
     doc["fxWidth"]       = state.fxWidth;
     doc["fxIntensity"]   = state.fxIntensity;
     doc["levelDim"]      = state.levelDim;
     doc["levelDimDepth"] = state.levelDimDepth;
 
-    // Moving-Head-Positionen
+    // Moving head positions
     JsonArray positions = doc["positions"].to<JsonArray>();
     for (auto &pos : state.positions) {
         JsonObject o = positions.add<JsonObject>();
@@ -472,13 +472,15 @@ static void buildConfigDoc(JsonDocument &doc, bool includeWifi) {
         }
     }
 
-    // Passwortschutz (Passwort nicht ins Backup)
+    doc["lang"] = state.langEn ? "en" : "de";
+
+    // Password protection (password not in the backup)
     JsonObject auth = doc["auth"].to<JsonObject>();
     auth["on"]   = state.authOn;
     auth["user"] = state.authUser;
     if (includeWifi) auth["pass"] = state.authPass;
 
-    // Intelligente Auto-Show, Sync, MQTT
+    // Smart auto show, sync, MQTT
     doc["autoShowSmart"] = state.autoShowSmart;
     JsonObject sync = doc["sync"].to<JsonObject>();
     sync["role"]  = state.syncRole;
@@ -488,10 +490,10 @@ static void buildConfigDoc(JsonDocument &doc, bool includeWifi) {
     mqtt["host"]  = state.mqttHost;
     mqtt["port"]  = state.mqttPort;
     mqtt["user"]  = state.mqttUser;
-    if (includeWifi) mqtt["pass"] = state.mqttPass;   // Passwort nicht ins Backup
+    if (includeWifi) mqtt["pass"] = state.mqttPass;   // Password not in the backup
     mqtt["topic"] = state.mqttTopic;
 
-    // Eigene Lauflichter
+    // Custom chases
     JsonArray chases = doc["chases"].to<JsonArray>();
     for (int c = 0; c < USER_CHASES; c++) {
         const UserChase &uc = state.userChases[c];
@@ -501,7 +503,7 @@ static void buildConfigDoc(JsonDocument &doc, bool includeWifi) {
         o["w"]      = uc.width;
         o["s"]      = uc.steps;
         o["smooth"] = uc.smooth;
-        // Kompakt: pro Schritt ein String "rrggbbrrggbb…"
+        // Compact: one string per step "rrggbbrrggbb…"
         JsonArray rows = o["rows"].to<JsonArray>();
         for (int st = 0; st < uc.steps; st++) {
             String row;
@@ -514,7 +516,7 @@ static void buildConfigDoc(JsonDocument &doc, bool includeWifi) {
         }
     }
 
-    // Zeitplan, Display
+    // Schedule, display
     JsonObject sched = doc["schedule"].to<JsonObject>();
     sched["on"]     = state.scheduleOn;
     sched["start"]  = state.scheduleStart;
@@ -526,7 +528,7 @@ static void buildConfigDoc(JsonDocument &doc, bool includeWifi) {
     doc["standbyMin"]    = state.standbyMin;
     doc["standbyPreset"] = state.standbyPreset;
 
-    // Cue-Liste
+    // Cue list
     JsonArray cues = doc["cues"].to<JsonArray>();
     for (auto &c : state.cues) {
         JsonObject o = cues.add<JsonObject>();
@@ -536,7 +538,7 @@ static void buildConfigDoc(JsonDocument &doc, bool includeWifi) {
     }
     doc["cueLoop"] = state.cueLoop;
 
-    // Mikrofon-Kalibrierung
+    // Microphone calibration
     JsonObject cal = doc["calibration"].to<JsonObject>();
     cal["done"]      = state.calibrated;
     cal["gateKick"]  = state.gateKick;
@@ -547,7 +549,7 @@ static void buildConfigDoc(JsonDocument &doc, bool includeWifi) {
     cal["refHihat"]  = state.refHihat;
     cal["refLevel"]  = state.refLevel;
 
-    // Effekt-Einstellungen
+    // Effect settings
     doc["effect"]     = state.currentEffect;
     doc["timerSpeed"] = state.timerSpeed;
     doc["colorR"]     = state.colorR;
@@ -556,12 +558,12 @@ static void buildConfigDoc(JsonDocument &doc, bool includeWifi) {
 }
 
 // ----------------------------------------------------
-// Default Config erzeugen
+// Create default config
 // ----------------------------------------------------
 void saveDefaultConfig() {
     state.fixtures.clear();
     
-    // 1. Beispiel: Statische PAR Lampe
+    // 1st example: static PAR lamp
     Fixture par;
     par.name = "PAR 1";
     par.start = 1;
@@ -570,7 +572,7 @@ void saveDefaultConfig() {
     par.isAutoMoving = false;
     state.fixtures.push_back(par);
 
-    // 2. Beispiel: Moving Head
+    // 2nd example: moving head
     Fixture mh;
     mh.name = "Head 1";
     mh.start = 10;
@@ -583,18 +585,18 @@ void saveDefaultConfig() {
     state.master = 255;
     state.wifi_ssid = "";
     state.wifi_pass = "";
-    state.audioThreshold = 45; // Default Threshold
+    state.audioThreshold = 45; // Default threshold
 
     saveConfig();
     Serial.println("Default-Config erstellt");
 }
 
 // ----------------------------------------------------
-// Config aus dem NVS lesen
+// Read config from NVS
 // ----------------------------------------------------
 static bool readConfigFromNVS(JsonDocument &doc) {
     Preferences prefs;
-    if (!prefs.begin(NVS_NAMESPACE, true)) return false; // Namespace existiert noch nicht
+    if (!prefs.begin(NVS_NAMESPACE, true)) return false; // Namespace does not exist yet
 
     size_t len = prefs.getBytesLength(NVS_CONFIG_KEY);
     bool ok = false;
@@ -605,7 +607,7 @@ static bool readConfigFromNVS(JsonDocument &doc) {
         if (!ok) Serial.println("Fehler: Config im NVS ist beschädigt");
     }
 
-    // Presets und Cue-Liste liegen in eigenen Einträgen (ältere Stände: in "config")
+    // Presets and cue list are stored in their own entries (older versions: in "config")
     const char *keys[3] = {NVS_PRESETS_KEY, NVS_CUES_KEY, NVS_CHASES_KEY};
     for (const char *key : keys) {
         if (!ok || doc[key].is<JsonArray>()) continue;
@@ -621,7 +623,7 @@ static bool readConfigFromNVS(JsonDocument &doc) {
     return ok;
 }
 
-// Einmalige Übernahme der alten /config.json aus LittleFS
+// One-time migration of the old /config.json from LittleFS
 static bool readLegacyConfig(JsonDocument &doc) {
     if (!LittleFS.exists(LEGACY_CONFIG)) return false;
     File f = LittleFS.open(LEGACY_CONFIG, "r");
@@ -629,7 +631,7 @@ static bool readLegacyConfig(JsonDocument &doc) {
     DeserializationError err = deserializeJson(doc, f);
     f.close();
 
-    // Uralte Formate (z. B. "fixtures": 4) nicht übernehmen
+    // Don't migrate ancient formats (e.g. "fixtures": 4)
     if (err || !doc["fixtures"].is<JsonArray>()) {
         Serial.println("Alte config.json ist ungültig → wird ignoriert");
         doc.clear();
@@ -639,7 +641,7 @@ static bool readLegacyConfig(JsonDocument &doc) {
 }
 
 // ----------------------------------------------------
-// Config laden
+// Load config
 // ----------------------------------------------------
 void loadConfig() {
     loadDefaultFixtureTypes();
@@ -655,7 +657,7 @@ void loadConfig() {
         }
     }
 
-    // Fixtures laden
+    // Load fixtures
     state.fixtures.clear();
     JsonArray arr = doc["fixtures"].as<JsonArray>();
     for (JsonObject o : arr) {
@@ -674,7 +676,7 @@ void loadConfig() {
         state.fixtures.push_back(fx);
     }
 
-    // Fixture-Typen laden
+    // Load fixture types
     JsonObject types = doc["fixtureTypes"].as<JsonObject>();
     for (JsonPair kv : types) {
         String name = kv.key().c_str();
@@ -684,7 +686,7 @@ void loadConfig() {
     state.master         = doc["master"]         | 255;
     state.wifi_ssid      = doc["wifi_ssid"]      | "";
     state.wifi_pass      = doc["wifi_pass"]      | "";
-    state.audioThreshold = doc["audioThreshold"] | 45; // Laden oder Default
+    state.audioThreshold = doc["audioThreshold"] | 45; // Load or default
     state.dropEnabled    = doc["dropEnabled"]    | true;
     state.dropAction     = constrain((int)(doc["dropAction"] | (int)DROP_STROBE), 0, DROP_ACTION_COUNT - 1);
     state.dropPreset     = doc["dropPreset"]     | "";
@@ -703,7 +705,7 @@ void loadConfig() {
     state.colorG         = doc["colorG"]         | 0;
     state.colorB         = doc["colorB"]         | 0;
 
-    // Presets laden
+    // Load presets
     state.presets.clear();
     for (JsonObject o : doc["presets"].as<JsonArray>()) {
         if (state.presets.size() >= MAX_PRESETS) break;
@@ -720,18 +722,18 @@ void loadConfig() {
         p.fxIntensity = constrain((int)(o["i"] | 50), 0, 100);
         p.energy     = constrain((int)(o["e"] | 0), 0, 3);
         if ((o["v2"] | false) || o["groups"].is<JsonArray>()) {
-            p.hasGroups = true;   // fehlende Gruppen/Palette = nicht benutzt (custom/on = false)
+            p.hasGroups = true;   // missing groups/palette = not used (custom/on = false)
             groupsFromJson(o["groups"].as<JsonArray>(), p.groups);
             paletteFromJson(o["palette"].as<JsonObject>(), p.palette);
         }
         state.presets.push_back(p);
     }
 
-    // Gruppen, Palette
+    // Groups, palette
     groupsFromJson(doc["groups"].as<JsonArray>(), state.groups);
     paletteFromJson(doc["palette"].as<JsonObject>(), state.palette);
 
-    // Nebel
+    // Fog
     JsonObject fog = doc["fog"].as<JsonObject>();
     state.fogChannel     = constrain((int)(fog["channel"]     | 0), 0, 512);
     state.fogLevel       = fog["level"]       | 255;
@@ -740,14 +742,14 @@ void loadConfig() {
     state.fogIntervalMin = constrain((int)(fog["intervalMin"] | 0), 0, 120);
     state.fogIntervalSec = constrain((int)(fog["intervalSec"] | 5), 1, 30);
 
-    // Übergänge, Effekt-Parameter, Lautstärke-Helligkeit
+    // Transitions, effect parameters, volume-driven brightness
     state.fadeMs        = constrain((int)(doc["fadeMs"] | 600), 0, 10000);
     state.fxWidth       = constrain((int)(doc["fxWidth"] | 1), 1, 8);
     state.fxIntensity   = constrain((int)(doc["fxIntensity"] | 50), 0, 100);
     state.levelDim      = doc["levelDim"] | false;
     state.levelDimDepth = constrain((int)(doc["levelDimDepth"] | 50), 0, 100);
 
-    // Moving-Head-Positionen
+    // Moving head positions
     state.positions.clear();
     for (JsonObject o : doc["positions"].as<JsonArray>()) {
         if (state.positions.size() >= MAX_POSITIONS) break;
@@ -759,13 +761,15 @@ void loadConfig() {
         state.positions.push_back(pos);
     }
 
-    // Passwortschutz
+    state.langEn = String(doc["lang"] | "de") == "en";
+
+    // Password protection
     JsonObject auth = doc["auth"].as<JsonObject>();
     state.authOn   = auth["on"]   | false;
     state.authUser = auth["user"] | "admin";
     if (auth["pass"].is<const char*>()) state.authPass = auth["pass"].as<String>();
 
-    // Intelligente Auto-Show, Sync, MQTT
+    // Smart auto show, sync, MQTT
     state.autoShowSmart = doc["autoShowSmart"] | false;
     JsonObject sync = doc["sync"].as<JsonObject>();
     state.syncRole  = constrain((int)(sync["role"] | 0), 0, 2);
@@ -778,7 +782,7 @@ void loadConfig() {
     if (mqtt["pass"].is<const char*>()) state.mqttPass = mqtt["pass"].as<String>();
     state.mqttTopic = mqtt["topic"] | "dmxcontroller";
 
-    // Eigene Lauflichter
+    // Custom chases
     int ci = 0;
     for (JsonObject o : doc["chases"].as<JsonArray>()) {
         if (ci >= USER_CHASES) break;
@@ -799,7 +803,7 @@ void loadConfig() {
         }
     }
 
-    // Zeitplan, Display
+    // Schedule, display
     JsonObject sched = doc["schedule"].as<JsonObject>();
     state.scheduleOn     = sched["on"]     | false;
     state.scheduleStart  = sched["start"]  | "18:00";
@@ -811,7 +815,7 @@ void loadConfig() {
     state.standbyMin    = constrain((int)(doc["standbyMin"] | 0), 0, 240);
     state.standbyPreset = doc["standbyPreset"] | "";
 
-    // Cue-Liste
+    // Cue list
     state.cues.clear();
     for (JsonObject o : doc["cues"].as<JsonArray>()) {
         if (state.cues.size() >= MAX_CUES) break;
@@ -823,7 +827,7 @@ void loadConfig() {
     }
     state.cueLoop = doc["cueLoop"] | true;
 
-    // Mikrofon-Kalibrierung
+    // Microphone calibration
     JsonObject cal = doc["calibration"].as<JsonObject>();
     state.calibrated = cal["done"]      | false;
     state.gateKick   = cal["gateKick"]  | 0.0;
@@ -834,7 +838,7 @@ void loadConfig() {
     state.refHihat   = cal["refHihat"]  | 170000.0;
     state.refLevel   = cal["refLevel"]  | 5000.0;
 
-    // Effekt "retro" heißt jetzt "lightorgan" – gespeicherte Namen umstellen
+    // Effect "retro" is now called "lightorgan" – rename stored names
     auto rename = [](String &e) { if (e == "retro") e = "lightorgan"; };
     rename(state.currentEffect);
     for (auto &p : state.presets) {
@@ -846,7 +850,7 @@ void loadConfig() {
     updateDMXChannelCount();
 
     if (migrated) {
-        // Ab jetzt nur noch NVS; die alte Datei wird nicht mehr gebraucht
+        // From now on only NVS; the old file is no longer needed
         saveConfig();
         LittleFS.remove(LEGACY_CONFIG);
         Serial.println("Config aus config.json ins NVS übernommen");
@@ -856,7 +860,7 @@ void loadConfig() {
 }
 
 // ----------------------------------------------------
-// State initialisieren
+// Initialize state
 // ----------------------------------------------------
 void initState() {
     if (!stateMutex) stateMutex = xSemaphoreCreateMutex();

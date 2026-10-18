@@ -9,11 +9,11 @@ const baseEffects = [
     "pump", "snareflash", "basswave"
 ];
 let effects = baseEffects.slice();
-// Anzeigenamen, wo sie vom internen Namen abweichen (eigene Lauflichter kommen dazu)
+// Display names where they differ from the internal name (custom chases are added)
 const effectLabels = { lightorgan: "light organ", snareflash: "snare flash", basswave: "bass wave" };
 const esc = t => String(t).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
-// Eigene Lauflichter als Effekte "user1"…"user4" ergänzen
+// Add custom chases as effects "user1"…"user4"
 function setUserChases(names) {
     effects = baseEffects.slice();
     (names || []).forEach((n, i) => {
@@ -24,14 +24,15 @@ function setUserChases(names) {
     buildEffectButtons();
     setEffect(currentEffect || "static", false);
 }
-const effectLabel = e => effectLabels[e] || e;
+// Display name: every word capitalized ("light organ" → "Light Organ"); the internal name stays the same
+const effectLabel = e => (effectLabels[e] || e).replace(/(^|\s)(\p{L})/gu, (m, sp, c) => sp + c.toUpperCase());
 
 const canvas = document.getElementById('colorCanvas');
 const ctx = canvas.getContext('2d');
 const cursor = document.getElementById('colorCursor');
 const radius = canvas.width / 2;
 
-// Einklappbare Bereiche: Zustand pro Browser merken
+// Foldable sections: remember state per browser
 function setupFolds() {
     document.querySelectorAll("details.fold").forEach(d => {
         try {
@@ -60,7 +61,7 @@ window.onload = () => {
     drawCircle();
     connectLive();
 
-    // Slider-Sperre
+    // Slider lock
     const sliders = document.querySelectorAll('input[type="range"]');
     sliders.forEach(s => {
         ["mousedown", "touchstart"].forEach(e => s.addEventListener(e, () => isDragging = true));
@@ -147,7 +148,7 @@ function loadConfig() {
     });
 }
 
-// --- Live-Status: per WebSocket (sofort bei jedem Beat), Polling nur als Notlösung ---
+// --- Live status: via WebSocket (immediately on every beat), polling only as fallback ---
 let pollTimer = null;
 function connectLive() {
     const ws = new WebSocket(`ws://${location.host}/ws`);
@@ -156,7 +157,7 @@ function connectLive() {
     };
     ws.onmessage = e => showStatus(JSON.parse(e.data));
     ws.onclose = () => {
-        // Verbindung weg (z. B. Neustart): solange pollen und alle 3 s neu verbinden
+        // Connection lost (e.g. restart): poll meanwhile and reconnect every 3 s
         if (!pollTimer) pollTimer = setInterval(updateStatus, 200);
         setTimeout(connectLive, 3000);
     };
@@ -168,7 +169,7 @@ function updateStatus() {
 
 let shownPreset = -1;
 function showStatus(data) {
-    // Effekt-Bibliothek und Presets mit dem tatsächlichen Zustand abgleichen
+    // Sync effect library and presets with the actual state
     if (data.effect !== undefined && data.effect !== currentEffect) setEffect(data.effect, false);
     if (data.preset !== undefined && data.preset !== shownPreset) {
         shownPreset = data.preset;
@@ -217,7 +218,7 @@ function showStatus(data) {
     }
 }
 
-// --- Tap-Tempo ---
+// --- Tap tempo ---
 function tap() {
     const btn = document.getElementById("tapBtn");
     btn.classList.add("on");
@@ -233,7 +234,7 @@ function toggleBpmLock() {
     fetch("/api/bpmLock?on=" + (on ? 1 : 0));
 }
 
-// --- Effekte im Takt ---
+// --- Effects on beat ---
 function updateSyncUi() {
     const sync = document.getElementById("beatSync").checked;
     document.getElementById("timerFader").disabled = sync;
@@ -247,9 +248,9 @@ function saveBeatSync() {
     fetch(`/api/settings?beatSync=${sync}&stepsPerBeat=${div}`);
 }
 
-// --- Drop-Reaktion ---
+// --- Drop reaction ---
 let dropPresetName = "";
-// Alle Preset-Auswahlen (Drop, Standby, Cue-Liste) aktualisieren
+// Update all preset selectors (drop, standby, cue list)
 let presetNames = [];
 let standbyPresetName = "";
 function fillPresetSelects(list) {
@@ -290,7 +291,7 @@ function saveDropAction() {
     fetch(`/api/settings?dropAction=${action}&dropPreset=${encodeURIComponent(preset)}`);
 }
 
-// --- Auto-Show ---
+// --- Auto show ---
 function saveAutoShow() {
     const on = document.getElementById("autoShow").checked ? 1 : 0;
     const smart = document.getElementById("autoShowSmart").checked ? 1 : 0;
@@ -300,7 +301,7 @@ function saveAutoShow() {
 
 const ENERGY_NAMES = ["egal", "ruhig", "mittel", "wild"];
 
-// --- Übergang / Effekt-Parameter / Lautstärke ---
+// --- Transition / effect parameters / volume ---
 function fmtFade(ms) {
     ms = parseInt(ms);
     return ms === 0 ? "hart" : (ms / 1000).toLocaleString("de-DE", { maximumFractionDigits: 1 }) + " s";
@@ -320,7 +321,7 @@ function scheduleOverride() {
     fetch("/api/scheduleOverride?on=1");
 }
 
-// --- Virtuelle Bühne: Farben aus den gesendeten DMX-Werten berechnen ---
+// --- Virtual stage: compute colors from the sent DMX values ---
 let stageItems = [];
 function buildStage(cfg) {
     const box = document.getElementById("stage");
@@ -373,7 +374,7 @@ setInterval(() => {
         .then(buf => drawStage(new Uint8Array(buf))).catch(() => {});
 }, 150);
 
-// --- Spektrum ---
+// --- Spectrum ---
 function drawSpectrum(spec) {
     const c = document.getElementById("specCanvas");
     if (c.width !== c.clientWidth) c.width = c.clientWidth;
@@ -382,14 +383,14 @@ function drawSpectrum(spec) {
     g.clearRect(0, 0, c.width, c.height);
     spec.forEach((v, i) => {
         const h = v / 255 * c.height;
-        g.fillStyle = `hsl(${(i / spec.length) * 270}, 90%, 55%)`; // Bass rot … Höhen violett
+        g.fillStyle = `hsl(${(i / spec.length) * 270}, 90%, 55%)`; // bass red … highs violet
         g.fillRect(i * w + 1, c.height - h, w - 2, h);
     });
 }
 
-// --- Halten-Knöpfe (Nebel): solange gedrückt alle 250 ms "on" senden ---
+// --- Hold buttons (fog): send "on" every 250 ms while pressed ---
 let fogConfigured = false;
-// canStart (optional): wird vor dem Start gefragt; false = nichts senden
+// canStart (optional): asked before starting; false = send nothing
 function setupHoldButton(id, url, canStart) {
     const btn = document.getElementById(id);
     let timer = null;
@@ -418,7 +419,7 @@ function saveFogOnDrop() {
     fetch("/api/settings?fogOnDrop=" + (document.getElementById("fogOnDrop").checked ? 1 : 0));
 }
 
-// --- Mikrofon einmessen ---
+// --- Microphone calibration ---
 let calTimer = null;
 function toggleCal() {
     const p = document.getElementById("calPanel");
@@ -433,27 +434,32 @@ function calShow(st) {
     if (st.message) document.getElementById("calMsg").textContent = st.message;
 }
 
+let calMeasuring = false;   // a measurement is running (don't check the displayed text – it may be translated)
 function calPoll() {
     fetch("/api/calibrate").then(r => r.json()).then(st => {
         calShow(st);
         clearTimeout(calTimer);
         if (st.phase) calTimer = setTimeout(calPoll, 300);
-        else if (document.getElementById("calMsg").textContent.startsWith("Messe")) {
+        else if (calMeasuring) {
+            calMeasuring = false;
             document.getElementById("calMsg").textContent = "Messung fertig.";
         }
     });
 }
 
 function calStep(step) {
-    if (step !== "apply") document.getElementById("calMsg").textContent = "Messe … bitte warten";
+    if (step === "silence" || step === "music") {
+        calMeasuring = true;
+        document.getElementById("calMsg").textContent = "Messe … bitte warten";
+    }
     fetch("/api/calibrate?step=" + step).then(r => r.json()).then(st => {
         calShow(st);
-        if (step === "apply" && st.ok) loadConfig(); // Slider steht jetzt auf 100
+        if (step === "apply" && st.ok) loadConfig(); // slider is now at 100
         if (st.phase) calPoll();
     });
 }
 
-// --- Farbpalette ---
+// --- Color palette ---
 const PALETTE_MAX = 8;
 function showPalette(p) {
     document.getElementById("paletteOn").checked = !!p.on;
@@ -475,7 +481,7 @@ function savePalette() {
     fetch(`/api/settings?paletteOn=${on}&paletteSize=${n}&palette=${encodeURIComponent(cols)}`);
 }
 
-// --- Gruppen ---
+// --- Groups ---
 function showGroups(groups, fixtures) {
     const rows = document.getElementById("groupRows");
     rows.innerHTML = "";
@@ -531,7 +537,7 @@ function saveStandby() {
     fetch(`/api/settings?standbyMin=${min}&standbyPreset=${encodeURIComponent(standbyPresetName)}`);
 }
 
-// --- Cue-Liste ---
+// --- Cue list ---
 let cues = [];
 let cueRunning = false, cueIndex = -1;
 
@@ -617,7 +623,7 @@ function showCueState(running, index) {
     cueRunning = running; cueIndex = index;
     const txt = running ? `läuft – Cue ${index + 1} von ${cues.length}` : "";
     document.getElementById("cueState").textContent = txt;
-    document.getElementById("cueStateHead").textContent = txt;   // auch im zugeklappten Bereich sichtbar
+    document.getElementById("cueStateHead").textContent = txt;   // also visible when the section is collapsed
     renderCues();
 }
 
@@ -698,7 +704,7 @@ function previewMaster(v) { document.getElementById("masterVal").textContent = v
 function saveMaster(v) { fetch("/api/setMaster?value=" + v); }
 function previewThreshold(v) { document.getElementById("thresholdVal").textContent = v; }
 function saveThreshold(v) { fetch("/api/setThreshold?value=" + v); }
-// Strobe-Knopf: solange gedrückt, alle 250 ms "on" senden (ESP stoppt nach 600 ms ohne Signal)
+// Strobe button: while pressed send "on" every 250 ms (the ESP stops after 600 ms without signal)
 let strobeTimer = null;
 function strobeStart(e) {
     e.preventDefault();
@@ -718,7 +724,7 @@ function setupStrobeButton() {
     const btn = document.getElementById("strobeBtn");
     btn.addEventListener("pointerdown", strobeStart);
     ["pointerup", "pointerleave", "pointercancel"].forEach(ev => btn.addEventListener(ev, strobeStop));
-    btn.addEventListener("contextmenu", e => e.preventDefault()); // kein Langdruck-Menü am Handy
+    btn.addEventListener("contextmenu", e => e.preventDefault()); // no long-press menu on phones
     window.addEventListener("blur", strobeStop);
 }
 
@@ -742,10 +748,10 @@ function setEffect(name, sendRequest = true) {
     if(sendRequest) fetch("/api/setEffect?name=" + name);
     document.getElementById("activeEffect").textContent = effectLabel(name);
     
-    // Alle Buttons zurücksetzen
+    // Reset all buttons
     document.querySelectorAll(".effect-btn").forEach(btn => btn.classList.remove("active"));
     
-    // Nur den einen Button aktivieren
+    // Activate only the one button
     const activeBtn = document.getElementById("btn-" + name);
     if (activeBtn) activeBtn.classList.add("active");
 }

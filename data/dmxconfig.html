@@ -2,6 +2,7 @@
 <head>
     <meta charset="UTF-8">
     <link rel="stylesheet" href="/style.css">
+    <script src="/i18n.js"></script>
     <title>DMX Konfiguration</title>
 
 </head>
@@ -197,7 +198,7 @@ function renderFixtures() {
     let highestAddress = 0;
     let occupiedRanges = [];
 
-    // 1. Bereiche berechnen und auf Überlappung prüfen
+    // 1. Compute ranges and check for overlap
     config.fixtures.forEach((fx, i) => {
         const def = config.fixtureTypes[fx.type];
         const channels = def ? parseInt(def.channels) : 1;
@@ -206,7 +207,7 @@ function renderFixtures() {
         
         if (end > highestAddress) highestAddress = end;
 
-        // Check gegen alle bisherigen Ranges
+        // Check against all previous ranges
         let overlap = occupiedRanges.find(r => (start <= r.end && end >= r.start));
         occupiedRanges.push({ start, end, name: fx.name, index: i });
 
@@ -280,7 +281,7 @@ function addFixture() {
 
 function deleteFixture(i) { config.fixtures.splice(i, 1); renderFixtures(); }
 
-// Leeres Feld = Kanal nicht vorhanden (-1); "0" ist ein gültiger Offset!
+// Empty field = channel not present (-1); "0" is a valid offset!
 function readOffset(id) {
     const v = document.getElementById(id).value.trim();
     return v === "" ? -1 : parseInt(v);
@@ -288,7 +289,7 @@ function readOffset(id) {
 
 function fmtOff(v) { return (v === undefined || v < 0) ? "–" : v; }
 
-// Typische Belegungen (Offsets ab 0, null = nicht vorhanden)
+// Typical layouts (offsets from 0, null = not present)
 const TEMPLATES = [
     { label: "RGB, 3 Kanäle (R, G, B)", name: "RGB3", ch: 3, R: 0, G: 1, B: 2 },
     { label: "RGBW, 4 Kanäle (R, G, B, W)", name: "RGBW4", ch: 4, R: 0, G: 1, B: 2, W: 3 },
@@ -325,7 +326,7 @@ function applyTemplate() {
 }
 
 function identify(i) {
-    // Lampe muss gespeichert sein (Index wie auf dem Controller)
+    // Lamp must be saved (index as on the controller)
     fetch("/api/identify?id=" + i);
 }
 
@@ -396,7 +397,7 @@ async function saveConfig() {
     });
     if (res.ok) {
         alert("Konfiguration LIVE übernommen!");
-        // Optional: Seite neu laden, um sauberen Stand zu haben
+        // Optional: reload the page to get a clean state
          location.reload(); 
     }
 }

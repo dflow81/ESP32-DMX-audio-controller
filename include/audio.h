@@ -2,15 +2,15 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 
-// FreeRTOS-Task für Mikrofon, FFT, Beat- und Drop-Erkennung (läuft auf Core 0)
+// FreeRTOS task for microphone, FFT, beat and drop detection (runs on core 0)
 void taskAudio(void *pv);
 
-// --- Mikrofon einmessen ---
-// Schritt 1: Stille messen (Rauschen), Schritt 2: laute Musik messen.
-// Danach applyCalibration(): setzt Rauschschwellen und "laut"-Referenzen.
+// --- Microphone calibration ---
+// Step 1: measure silence (noise), step 2: measure loud music.
+// Then applyCalibration(): sets noise thresholds and "loud" references.
 #define CAL_SILENCE 1
 #define CAL_MUSIC   2
 void startCalibration(int phase, unsigned long durationMs);
 void cancelCalibration();
-bool applyCalibration(String &message);   // Aufrufer hält den StateLock
+bool applyCalibration(String &message);   // caller holds the StateLock
 void calibrationStatus(JsonObject o);

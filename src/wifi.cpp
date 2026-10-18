@@ -5,16 +5,16 @@
 
 extern ControllerState state;
 
-#define WIFI_CONNECT_TIMEOUT_MS  8000   // Beim Start so lange auf das WLAN warten
-#define WIFI_RETRY_MS           30000   // Ohne Verbindung alle 30 s neu versuchen
-#define WIFI_AP_FALLBACK_MS     60000   // So lange ohne WLAN, bevor der Hotspot angeht
+#define WIFI_CONNECT_TIMEOUT_MS  8000   // Wait this long for Wi-Fi at startup
+#define WIFI_RETRY_MS           30000   // Without connection retry every 30 s
+#define WIFI_AP_FALLBACK_MS     60000   // This long without Wi-Fi before the hotspot turns on
 
 static bool apActive = false;
 static unsigned long lastAttempt = 0;
 static unsigned long lostSince = 0;
 
 static void startAP() {
-    // Mit gespeichertem WLAN: AP+STA, damit im Hintergrund weiter verbunden werden kann
+    // With saved Wi-Fi: AP+STA so it can keep connecting in the background
     WiFi.mode(state.wifi_ssid.length() > 0 ? WIFI_AP_STA : WIFI_AP);
     WiFi.softAP(AP_SSID, AP_PASSWORD);
     apActive = true;
@@ -40,17 +40,17 @@ static void connectSTA() {
 void setupWiFi() {
 
     Serial.println("Starte WLAN...");
-    WiFi.persistent(false);       // Zugangsdaten nicht zusätzlich im ESP-internen Flash ablegen
-    WiFi.setAutoReconnect(true);  // kurze Aussetzer fängt der ESP selbst ab
+    WiFi.persistent(false);       // Don't additionally store the credentials in the ESP's internal flash
+    WiFi.setAutoReconnect(true);  // the ESP handles short dropouts itself
 
-    // Wenn keine Daten gespeichert → AP starten
+    // No credentials saved → start AP
     if (state.wifi_ssid.length() == 0) {
         Serial.println("Keine WLAN-Daten gespeichert → Starte Access Point");
         startAP();
         return;
     }
 
-    // Mit gespeichertem WLAN verbinden
+    // Connect to the saved Wi-Fi
     Serial.printf("Verbinde mit WLAN: %s\n", state.wifi_ssid.c_str());
 
     WiFi.mode(WIFI_STA);
@@ -74,7 +74,7 @@ void setupWiFi() {
 }
 
 void handleWiFi() {
-    if (state.wifi_ssid.length() == 0) return; // Nur Hotspot-Betrieb, nichts zu tun
+    if (state.wifi_ssid.length() == 0) return; // Hotspot-only operation, nothing to do
 
     unsigned long now = millis();
 
@@ -84,12 +84,12 @@ void handleWiFi() {
             Serial.println(WiFi.localIP());
             lostSince = 0;
         }
-        // Hotspot erst abschalten, wenn niemand mehr darüber verbunden ist
+        // Only turn off the hotspot once nobody is connected through it
         if (apActive && WiFi.softAPgetStationNum() == 0) stopAP();
         return;
     }
 
-    // Keine Verbindung
+    // No connection
     if (!lostSince) {
         lostSince = now;
         Serial.println("WLAN-Verbindung verloren");
